@@ -125,5 +125,5 @@ else
 fi
 
 # ── Start server ──────────────────────────────────────────
-echo "Starting AnimaWorks server on port 18500..."
-exec animaworks start --host 0.0.0.0 --port 18500 --foreground
+echo "Starting AnimaWorks server on port 18501..."
+exec animaworks start --host 0.0.0.0 --port 18501 --foreground

@@ -30,7 +30,7 @@ Get one at [console.anthropic.com](https://console.anthropic.com/) if you don't 
 docker compose up
 ```
 
-Open **http://localhost:18500** and you're in.
+Open **http://localhost:18501** and you're in.
 
 ---
 
@@ -111,12 +111,12 @@ ANTHROPIC_API_KEY=sk-ant-... PRESET=en-business docker compose up
 
 ### Ports
 
-The demo server runs on port **18500**. If that's taken:
+The demo server runs on port **18501** (one above the default 18500, so it won't conflict with a native install). If that's taken:
 
 ```bash
 # In docker-compose.yml, change the port mapping:
 ports:
-  - "9000:18500"   # access via http://localhost:9000
+  - "9000:18501"   # access via http://localhost:9000
 ```
 
 ---
@@ -170,17 +170,17 @@ Your `ANTHROPIC_API_KEY` is missing or invalid. Check your `.env` file:
 cat .env   # should show ANTHROPIC_API_KEY=sk-ant-api03-...
 ```
 
-### Port 18500 already in use
+### Port 18501 already in use
 
 Another service is using that port. Either stop it or change the mapping:
 
 ```bash
 # Check what's using the port
-lsof -i :18500
+lsof -i :18501
 
 # Or change the port in docker-compose.yml
 ports:
-  - "9000:18500"
+  - "9000:18501"
 ```
 
 ### Agents aren't responding

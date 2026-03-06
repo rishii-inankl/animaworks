@@ -30,7 +30,7 @@ APIキーがまだない場合は [console.anthropic.com](https://console.anthro
 docker compose up
 ```
 
-**http://localhost:18500** を開けば準備完了。
+**http://localhost:18501** を開けば準備完了。
 
 ---
 
@@ -116,12 +116,12 @@ ANTHROPIC_API_KEY=sk-ant-... PRESET=ja-anime docker compose up
 
 ### ポート
 
-デモサーバーはポート **18500** で動作します。別のポートを使う場合:
+デモサーバーはポート **18501** で動作します（デフォルトの18500と被らないよう+1）。別のポートを使う場合:
 
 ```bash
 # docker-compose.yml のポートマッピングを変更:
 ports:
-  - "9000:18500"   # http://localhost:9000 でアクセス
+  - "9000:18501"   # http://localhost:9000 でアクセス
 ```
 
 ---
@@ -175,17 +175,17 @@ docker compose up         # 初期化からやり直し
 cat .env   # ANTHROPIC_API_KEY=sk-ant-api03-... と表示されるはず
 ```
 
-### ポート18500が使用中
+### ポート18501が使用中
 
 別のサービスがポートを使っています。停止するかマッピングを変更:
 
 ```bash
 # ポートの使用状況を確認
-lsof -i :18500
+lsof -i :18501
 
 # または docker-compose.yml でポートを変更
 ports:
-  - "9000:18500"
+  - "9000:18501"
 ```
 
 ### エージェントが応答しない

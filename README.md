@@ -5,8 +5,13 @@
 Each agent has its own name, personality, memory, and schedule. They communicate through messages, make decisions on their own, and collaborate like a real team. You manage them through a web dashboard — or just talk to the leader and let them handle the rest.
 
 <p align="center">
+  <img src="docs/images/workspace-dashboard.gif" alt="AnimaWorks Workspace — real-time org tree with live activity feeds" width="720">
+  <br><em>Workspace dashboard: live org tree showing each Anima's role, status, and recent actions at a glance.</em>
+</p>
+
+<p align="center">
   <img src="docs/images/workspace-demo.gif" alt="AnimaWorks 3D Workspace — agents autonomously collaborating" width="720">
-  <br><em>3D workspace: Animas sitting at desks, walking around, and exchanging messages on the shared board — all autonomously.</em>
+  <br><em>3D office: Animas sitting at desks, walking around, and exchanging messages — all autonomously.</em>
 </p>
 
 **[日本語版 README はこちら](README_ja.md)**
@@ -108,8 +113,8 @@ animaworks start
 Your command center. See every agent's status, recent activity, and memory stats at a glance.
 
 <p align="center">
-  <img src="docs/images/dashboard.png" alt="AnimaWorks Dashboard" width="720">
-  <br><em>Dashboard: Animas running, scheduler active, real-time activity feed at the bottom.</em>
+  <img src="docs/images/dashboard.png" alt="AnimaWorks Dashboard — org chart with 19 agents" width="720">
+  <br><em>Dashboard: 19 Animas across 4 hierarchy levels, all running with real-time status.</em>
 </p>
 
 - **Chat** — Talk to any Anima with streaming responses, image attachments, multi-thread conversations, and full history
@@ -152,8 +157,8 @@ Once your team exists, they run on their own:
 ### Auto-Generated Avatars
 
 <p align="center">
-  <img src="docs/images/asset-management.png" alt="AnimaWorks Asset Management — auto-generated portraits and 3D models" width="720">
-  <br><em>Asset manager: full-body, bust-up, chibi, 3D model, and animation — all auto-generated from personality.</em>
+  <img src="docs/images/asset-management.png" alt="AnimaWorks Asset Management — realistic portraits and expression variants" width="720">
+  <br><em>Asset manager: realistic full-body, bust-up, and expression variants — all auto-generated from personality.</em>
 </p>
 
 When a new Anima is created, AnimaWorks can automatically generate a character portrait and 3D model from their personality description. If a supervisor already has a portrait, **Vibe Transfer** applies the same art style to new hires — so your whole team looks visually consistent.
@@ -209,8 +214,8 @@ Most AI agents have something resembling amnesia — they only remember what fit
 - **Forgetting** — Low-value memories gradually fade through 3 stages: marking, merging, and archival. Important procedures and skills are protected.
 
 <p align="center">
-  <img src="docs/images/chat-memory.png" alt="An Anima autonomously cleaning up its own memory" width="720">
-  <br><em>An Anima deciding which memories to keep and which to discard — without being asked.</em>
+  <img src="docs/images/chat-memory.png" alt="AnimaWorks Chat — split-screen conversations with multiple Animas" width="720">
+  <br><em>Chat: multi-thread conversations — a manager reviewing code fixes while an engineer reports progress.</em>
 </p>
 
 ---

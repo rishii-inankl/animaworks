@@ -19,6 +19,6 @@ COPY demo/presets/ /demo/presets/
 COPY demo/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-EXPOSE 18500
+EXPOSE 18501
 
 ENTRYPOINT ["/entrypoint.sh"]

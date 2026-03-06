@@ -4,7 +4,7 @@ services:
       context: ..
       dockerfile: demo/Dockerfile
     ports:
-      - "18500:18500"
+      - "18501:18501"
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       PRESET: ${PRESET:-en-business}
