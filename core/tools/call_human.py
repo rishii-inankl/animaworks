@@ -64,15 +64,40 @@ def _get_bot_token(channel_cfg: dict) -> str:
         return ""
 
 
-async def _send_slack(channel: str, token: str, text: str) -> str:
+def _resolve_cli_anima_identity(channel_cfg: dict) -> tuple[str, str]:
+    """Resolve Anima name and icon URL for CLI call_human invocations.
+
+    Returns (username, icon_url) — either may be empty string.
+    """
+    import os
+
+    anima_dir = os.environ.get("ANIMAWORKS_ANIMA_DIR")
+    if not anima_dir:
+        return ("", "")
+
+    anima_name = Path(anima_dir).name
+    icon_url = ""
+    template = channel_cfg.get("icon_url_template", "")
+    if template:
+        icon_url = template.format(name=anima_name)
+    return (anima_name, icon_url)
+
+
+async def _send_slack(channel: str, token: str, text: str, *, username: str = "", icon_url: str = "") -> str:
     import httpx
 
     try:
+        payload: dict[str, str] = {"channel": channel, "text": text}
+        if username:
+            payload["username"] = username
+        if icon_url:
+            payload["icon_url"] = icon_url
+
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
                 "https://slack.com/api/chat.postMessage",
                 headers={"Authorization": f"Bearer {token}"},
-                json={"channel": channel, "text": text},
+                json=payload,
             )
             resp.raise_for_status()
             data = resp.json()
@@ -159,7 +184,8 @@ def cli_main(args: list[str]) -> None:
             if not channel_id:
                 results.append("slack: ERROR - no channel configured")
                 continue
-            result = asyncio.run(_send_slack(channel_id, token, text))
+            username, icon_url = _resolve_cli_anima_identity(ch_cfg)
+            result = asyncio.run(_send_slack(channel_id, token, text, username=username, icon_url=icon_url))
             results.append(f"slack: {result}")
         else:
             results.append(f"{ch_type}: not supported in CLI mode")

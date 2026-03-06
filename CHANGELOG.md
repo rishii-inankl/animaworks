@@ -7,6 +7,11 @@ adhering to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- use setuptools find_packages for complete package discovery (Docker install fix)
+- skip CLAUDE.md test when file absent (public repo CI)
+- add Slack icon_url/username to all outbound message routes
+
 ## [0.5.1] - 2026-03-06
 
 

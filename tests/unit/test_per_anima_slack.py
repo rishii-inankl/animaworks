@@ -99,11 +99,12 @@ class TestResolveSlackToken:
 class TestSendViaSlackPerAnima:
     """Tests for core.outbound._send_via_slack per-Anima token behavior."""
 
+    @patch("core.outbound._resolve_outbound_icon", return_value="https://example.com/sakura.png")
     @patch("core.tools.slack.SlackClient")
     @patch("core.tools._base._lookup_shared_credentials", return_value=None)
     @patch("core.tools._base._lookup_vault_credential", return_value="xoxb-per-anima")
     def test_uses_per_anima_token_when_anima_name_has_token(
-        self, mock_vault, mock_shared, mock_client_cls
+        self, mock_vault, mock_shared, mock_client_cls, mock_icon
     ):
         mock_client = MagicMock()
         mock_client.post_message.return_value = {"ts": "123.456", "channel": "U1"}
@@ -113,15 +114,17 @@ class TestSendViaSlackPerAnima:
 
         mock_vault.assert_called_once_with("SLACK_BOT_TOKEN__sakura")
         mock_client_cls.assert_called_once_with(token="xoxb-per-anima")
-        # Prefix omitted when per-Anima token: text should be "hello" not "[sakura] hello"
-        mock_client.post_message.assert_called_once_with("U1", "hello")
+        mock_client.post_message.assert_called_once_with(
+            "U1", "hello", username="sakura", icon_url="https://example.com/sakura.png",
+        )
         assert "sent" in result
 
+    @patch("core.outbound._resolve_outbound_icon", return_value="")
     @patch("core.tools.slack.SlackClient")
     @patch("core.tools._base._lookup_shared_credentials", return_value="xoxb-per")
     @patch("core.tools._base._lookup_vault_credential", return_value=None)
     def test_omits_sender_prefix_when_per_anima_token_used(
-        self, mock_vault, mock_shared, mock_client_cls
+        self, mock_vault, mock_shared, mock_client_cls, mock_icon
     ):
         mock_client = MagicMock()
         mock_client.post_message.return_value = {"ts": "1.1", "channel": "U1"}
@@ -129,13 +132,16 @@ class TestSendViaSlackPerAnima:
 
         result = _send_via_slack("U1", "content", "sakura", anima_name="sakura")
 
-        mock_client.post_message.assert_called_once_with("U1", "content")
+        mock_client.post_message.assert_called_once_with(
+            "U1", "content", username="sakura", icon_url="",
+        )
 
+    @patch("core.outbound._resolve_outbound_icon", return_value="")
     @patch("core.tools.slack.SlackClient")
     @patch("core.tools._base._lookup_shared_credentials", return_value=None)
     @patch("core.tools._base._lookup_vault_credential", return_value=None)
     def test_includes_sender_prefix_when_fallback_to_shared_token(
-        self, mock_vault, mock_shared, mock_client_cls
+        self, mock_vault, mock_shared, mock_client_cls, mock_icon
     ):
         mock_client = MagicMock()
         mock_client.post_message.return_value = {"ts": "1.1", "channel": "U1"}
@@ -144,7 +150,9 @@ class TestSendViaSlackPerAnima:
         result = _send_via_slack("U1", "content", "sakura", anima_name="")
 
         mock_client_cls.assert_called_once_with(token=None)
-        mock_client.post_message.assert_called_once_with("U1", "[sakura] content")
+        mock_client.post_message.assert_called_once_with(
+            "U1", "[sakura] content", username="sakura", icon_url="",
+        )
 
     @patch("core.outbound._send_via_slack")
     def test_send_external_passes_anima_name_to_send_via_slack(self, mock_send):

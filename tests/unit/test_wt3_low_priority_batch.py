@@ -198,11 +198,15 @@ class TestLitellmCommentUpdated:
 class TestClaudeMdModeBExclusion:
     """Fix 11: CLAUDE.md documents Mode B session chaining exclusion."""
 
+    _CLAUDE_MD = Path(__file__).resolve().parents[2] / "CLAUDE.md"
+
+    @pytest.mark.skipif(
+        not (Path(__file__).resolve().parents[2] / "CLAUDE.md").exists(),
+        reason="CLAUDE.md not present (public repo)",
+    )
     def test_claude_md_mode_b_exclusion(self):
         """CLAUDE.md should contain the Mode B session chaining note."""
-        claude_md_path = Path(__file__).resolve().parents[2] / "CLAUDE.md"
-        content = claude_md_path.read_text(encoding="utf-8")
-        # Mode B entry should mention session chaining is not supported
+        content = self._CLAUDE_MD.read_text(encoding="utf-8")
         assert "セッションチェイニング非対応" in content or "session chaining" in content.lower(), (
             "CLAUDE.md Mode B section should mention session chaining exclusion"
         )

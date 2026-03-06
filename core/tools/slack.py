@@ -940,13 +940,34 @@ def cli_main(argv: list[str] | None = None) -> None:
         sys.exit(130)
 
 
+def _resolve_cli_identity() -> tuple[str, str]:
+    """Resolve Anima display name and icon URL for CLI invocations.
+
+    Uses ``ANIMAWORKS_ANIMA_DIR`` env var (set by framework for subprocesses).
+    Returns (username, icon_url) — either may be empty string.
+    """
+    import os
+
+    anima_dir = os.environ.get("ANIMAWORKS_ANIMA_DIR")
+    if not anima_dir:
+        return ("", "")
+    return _resolve_slack_identity({"anima_dir": anima_dir})
+
+
 def _run_cli_command(client: SlackClient, args) -> None:
     """Dispatch CLI subcommands."""
     if args.command == "send":
         channel_id = client.resolve_channel(args.channel)
         message = md_to_slack_mrkdwn(" ".join(args.message))
         thread_ts = getattr(args, "thread", None)
-        response = client.post_message(channel_id, message, thread_ts=thread_ts)
+        username, icon_url = _resolve_cli_identity()
+        response = client.post_message(
+            channel_id,
+            message,
+            thread_ts=thread_ts,
+            username=username,
+            icon_url=icon_url,
+        )
         ts = response.get("ts", "")
         channel = response.get("channel", channel_id)
         print(f"Sent (channel: {channel}, ts: {ts})")
