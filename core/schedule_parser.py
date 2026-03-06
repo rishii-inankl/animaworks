@@ -110,6 +110,20 @@ def parse_cron_md(content: str) -> list[CronTask]:
     return tasks
 
 
+def _strip_outer_quotes(val: str) -> str:
+    """Strip a matching pair of outer quotes (``"..."`` or ``'...'``).
+
+    Only strips when the inner content does *not* contain the same quote
+    character, so values like ``"status": "ACTIVE"`` (where quotes are
+    intentional regex literals) are left untouched.
+    """
+    if len(val) >= 2 and val[0] in ('"', "'") and val[-1] == val[0]:
+        inner = val[1:-1]
+        if val[0] not in inner:
+            return inner
+    return val
+
+
 def _parse_section(name: str, lines: list[str]) -> CronTask:
     """Parse a single cron task section from its body lines.
 
@@ -140,6 +154,7 @@ def _parse_section(name: str, lines: list[str]) -> CronTask:
             tool = stripped[5:].strip()
         elif stripped.startswith("skip_pattern:"):
             val = stripped[len("skip_pattern:") :].strip()
+            val = _strip_outer_quotes(val)
             if val:
                 try:
                     re.compile(val)

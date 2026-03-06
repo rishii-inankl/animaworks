@@ -19,8 +19,21 @@ from pathlib import Path
 # Project root: where the code lives (immutable, git-tracked)
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 
-# Templates shipped with the project
-TEMPLATES_DIR = PROJECT_DIR / "templates"
+
+def _resolve_templates_dir() -> Path:
+    """Resolve templates directory for both development and installed modes.
+
+    Resolution order:
+      1. ANIMAWORKS_TEMPLATES_DIR env var (explicit override, e.g. Docker)
+      2. PROJECT_DIR / "templates" (development / editable install)
+    """
+    env = os.environ.get("ANIMAWORKS_TEMPLATES_DIR")
+    if env:
+        return Path(env).resolve()
+    return PROJECT_DIR / "templates"
+
+
+TEMPLATES_DIR = _resolve_templates_dir()
 
 # Default runtime data directory
 _DEFAULT_DATA_DIR = Path.home() / ".animaworks"

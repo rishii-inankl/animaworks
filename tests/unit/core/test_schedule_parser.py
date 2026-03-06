@@ -385,6 +385,45 @@ skip_pattern: [unterminated
         assert tasks[0].skip_pattern is None
         assert "Invalid skip_pattern" in caplog.text
 
+    def test_skip_pattern_double_quoted_stripped(self):
+        """Double-quoted skip_pattern has quotes stripped (YAML-like syntax)."""
+        content = """\
+## Check
+schedule: */5 * * * *
+type: command
+command: /path/to/script.sh
+skip_pattern: "NEW_MENTIONS: 0"
+"""
+        tasks = parse_cron_md(content)
+        assert len(tasks) == 1
+        assert tasks[0].skip_pattern == "NEW_MENTIONS: 0"
+
+    def test_skip_pattern_single_quoted_stripped(self):
+        """Single-quoted skip_pattern has quotes stripped."""
+        content = """\
+## Check
+schedule: */5 * * * *
+type: command
+command: /path/to/script.sh
+skip_pattern: 'No new messages'
+"""
+        tasks = parse_cron_md(content)
+        assert len(tasks) == 1
+        assert tasks[0].skip_pattern == "No new messages"
+
+    def test_skip_pattern_quotes_preserved_when_inner_quotes(self):
+        """Quotes are preserved when inner content contains the same quote char."""
+        content = """\
+## Check
+schedule: */5 * * * *
+type: command
+command: /path/to/script.sh
+skip_pattern: "status": "ACTIVE"
+"""
+        tasks = parse_cron_md(content)
+        assert len(tasks) == 1
+        assert tasks[0].skip_pattern == '"status": "ACTIVE"'
+
     def test_skip_pattern_with_tool_and_args(self):
         """skip_pattern works alongside tool and args."""
         content = """\

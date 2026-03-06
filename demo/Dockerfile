@@ -15,6 +15,8 @@ COPY main.py .
 
 RUN pip install --no-cache-dir ".[rag]"
 
+ENV ANIMAWORKS_TEMPLATES_DIR=/app/templates
+
 COPY demo/presets/ /demo/presets/
 COPY demo/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
