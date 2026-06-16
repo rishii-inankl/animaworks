@@ -26,7 +26,7 @@ from core.time_utils import ensure_aware, now_iso, now_local
 
 logger = logging.getLogger("animaworks.messenger")
 
-_SAFE_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,30}$")
+_SAFE_ASCII_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,30}$")
 
 # ── External message dedup (source_message_id) ──────────
 _EXTERNAL_DEDUP_TTL = 30  # seconds
@@ -49,7 +49,19 @@ def _is_duplicate_external(source: str, source_message_id: str) -> bool:
 
 def _validate_name(name: str, kind: str = "name") -> None:
     """Validate a channel or peer name to prevent path traversal."""
-    if not _SAFE_NAME_RE.match(name):
+    if _SAFE_ASCII_NAME_RE.match(name):
+        return
+    has_non_ascii = any(ord(ch) > 127 for ch in name)
+    unsafe = (
+        not name
+        or len(name) > 80
+        or name.startswith(".")
+        or ".." in name
+        or "/" in name
+        or "\\" in name
+        or any(ch.isspace() or ord(ch) < 32 for ch in name)
+    )
+    if unsafe or not has_non_ascii:
         raise RecipientNotFoundError(f"Invalid {kind}: {name!r}")
 
 

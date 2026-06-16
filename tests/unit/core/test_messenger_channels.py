@@ -293,7 +293,13 @@ class TestNameValidation:
         messenger.post_channel("general", "ok")
         messenger.post_channel("ops", "ok")
         messenger.post_channel("my-channel-1", "ok")
+        messenger.post_channel("デジタル伴走事業_tasks", "ok")
+        assert messenger.read_channel("デジタル伴走事業_tasks")
 
     def test_uppercase_channel_rejected(self, messenger):
         with pytest.raises(RecipientNotFoundError, match="Invalid channel name"):
             messenger.post_channel("General", "not allowed")
+
+    def test_non_ascii_channel_still_rejects_path_traversal(self, messenger):
+        with pytest.raises(RecipientNotFoundError, match="Invalid channel name"):
+            messenger.post_channel("デジタル伴走事業/../tasks", "not allowed")
