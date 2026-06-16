@@ -378,14 +378,55 @@ def _route_to_board(channel_id: str, text: str, user_name: str, *, ts: str = "")
 
     try:
         cfg = load_config()
-        board_name = cfg.external_messaging.slack.board_mapping.get(channel_id)
+        slack_cfg = cfg.external_messaging.slack
+        board_name = slack_cfg.board_mapping.get(channel_id)
         if not board_name:
+            return
+        allowed_boards = set(slack_cfg.board_outbound_sync or [])
+        if allowed_boards and board_name not in allowed_boards:
+            logger.debug(
+                "Board routing skipped for disallowed Slack channel %s -> %s",
+                channel_id,
+                board_name,
+            )
             return
         shared_dir = get_data_dir() / "shared"
         messenger = Messenger(shared_dir, user_name or "slack")
         messenger.post_channel(board_name, text, source="slack", from_name=user_name or "slack")
     except Exception:
         logger.debug("Board routing failed for channel %s", channel_id, exc_info=True)
+
+
+def _is_allowed_slack_channel(channel_id: str, *, cfg: Any | None = None) -> bool:
+    """Return whether an incoming Slack channel is allowed for processing.
+
+    ``board_outbound_sync`` is also treated as a Slack channel allowlist when
+    populated.  This keeps Socket Mode from ingesting or responding in
+    unrelated Slack channels even if the bot is invited there.
+    """
+    if not channel_id or channel_id.startswith("D"):
+        return True
+    try:
+        cfg = cfg or load_config()
+        slack_cfg = cfg.external_messaging.slack
+        allowed_boards = set(slack_cfg.board_outbound_sync or [])
+        if not allowed_boards:
+            return True
+        board_name = slack_cfg.board_mapping.get(channel_id)
+        if board_name and board_name in allowed_boards:
+            return True
+        # Explicit anima_mapping is a direct channel-level route.  When an
+        # allowlist is active, keep this path only for channels that are also
+        # represented in the allowlisted board mapping.
+        logger.debug(
+            "Ignoring Slack event from disallowed channel %s (board=%s)",
+            channel_id,
+            board_name or "",
+        )
+        return False
+    except Exception:
+        logger.debug("Failed to evaluate Slack channel allowlist for %s", channel_id, exc_info=True)
+        return False
 
 
 class SlackSocketModeManager:
@@ -655,10 +696,14 @@ class SlackSocketModeManager:
 
             ts = event.get("ts", "")
             channel_id = event.get("channel", "")
+            is_dm = channel_id.startswith("D")
+
+            if not _is_allowed_slack_channel(channel_id):
+                return
 
             # ── Own bot messages: forward to board only (no inbox) ──
             if is_own_bot:
-                if not channel_id.startswith("D"):
+                if not is_dm:
                     # Resolve the anima name from the bot UID for the board post
                     bot_name = next(
                         (n for n, uid in all_bot_uids.items() if uid == sender),
@@ -788,6 +833,9 @@ class SlackSocketModeManager:
             channel_id = event.get("channel", "")
             thread_ts = event.get("thread_ts", "")
 
+            if not _is_allowed_slack_channel(channel_id):
+                return
+
             _mention_token = self._get_per_anima_credential("SLACK_BOT_TOKEN", anima_name) or ""
             ch_name = await asyncio.to_thread(_resolve_channel_name, _mention_token, channel_id)
 
@@ -860,6 +908,8 @@ class SlackSocketModeManager:
 
             channel_id = event.get("channel", "")
             cfg = load_config()
+            if not _is_allowed_slack_channel(channel_id, cfg=cfg):
+                return
             slack_cfg = cfg.external_messaging.slack
             anima_name = slack_cfg.anima_mapping.get(channel_id) or slack_cfg.default_anima
             if not anima_name:
@@ -947,6 +997,8 @@ class SlackSocketModeManager:
 
             channel_id = event.get("channel", "")
             cfg = load_config()
+            if not _is_allowed_slack_channel(channel_id, cfg=cfg):
+                return
             slack_cfg = cfg.external_messaging.slack
             anima_name_resolved = slack_cfg.anima_mapping.get(channel_id) or slack_cfg.default_anima
             if not anima_name_resolved:

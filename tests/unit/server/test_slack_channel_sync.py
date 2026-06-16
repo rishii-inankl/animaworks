@@ -17,7 +17,7 @@ class _FakeSlackManager:
 def _mock_config() -> SimpleNamespace:
     return SimpleNamespace(
         external_messaging=SimpleNamespace(
-            slack=SimpleNamespace(default_anima="sakura", board_mapping={}),
+            slack=SimpleNamespace(default_anima="sakura", board_mapping={}, board_outbound_sync=[]),
         ),
     )
 
@@ -133,7 +133,7 @@ async def test_sync_falls_back_to_available_bot_when_default_missing(
 
     cfg = SimpleNamespace(
         external_messaging=SimpleNamespace(
-            slack=SimpleNamespace(default_anima="kotoha", board_mapping={}),
+            slack=SimpleNamespace(default_anima="kotoha", board_mapping={}, board_outbound_sync=[]),
         ),
     )
 
@@ -181,7 +181,7 @@ async def test_sync_returns_empty_when_no_bots_available(
 
     cfg = SimpleNamespace(
         external_messaging=SimpleNamespace(
-            slack=SimpleNamespace(default_anima="kotoha", board_mapping={}),
+            slack=SimpleNamespace(default_anima="kotoha", board_mapping={}, board_outbound_sync=[]),
         ),
     )
 
@@ -197,3 +197,59 @@ async def test_sync_returns_empty_when_no_bots_available(
 
     assert result == {}
     assert "no Slack bots available for channel discovery" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_sync_respects_board_outbound_sync_allowlist(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shared_dir = tmp_path / "shared"
+    channels_dir = shared_dir / "channels"
+    channels_dir.mkdir(parents=True)
+
+    cfg = SimpleNamespace(
+        external_messaging=SimpleNamespace(
+            slack=SimpleNamespace(
+                default_anima="sakura",
+                board_mapping={},
+                board_outbound_sync=["allowed-board"],
+            ),
+        ),
+    )
+
+    monkeypatch.setattr("server.slack_channel_sync.get_shared_dir", lambda: shared_dir)
+    monkeypatch.setattr("server.slack_socket.SlackSocketModeManager", _FakeSlackManager)
+
+    async def _list_public_channels(_token: str):
+        return [
+            {"id": "C_ALLOW", "name": "allowed-board", "is_private": False},
+            {"id": "C_GENERAL", "name": "general", "is_private": False},
+        ]
+
+    joined_channels: list[str] = []
+
+    async def _join_channel_if_needed(_token: str, channel_id: str, *_args, **_kwargs):
+        joined_channels.append(channel_id)
+        return False
+
+    async def _create_channel(*_args, **_kwargs):
+        raise AssertionError("non-allowlisted boards should not be reverse synced")
+
+    monkeypatch.setattr("server.slack_channel_sync._list_public_channels", _list_public_channels)
+    monkeypatch.setattr("server.slack_channel_sync._join_channel_if_needed", _join_channel_if_needed)
+    monkeypatch.setattr("server.slack_channel_sync._create_channel", _create_channel)
+    monkeypatch.setattr("core.config.models.load_config", lambda: cfg)
+    monkeypatch.setattr("core.config.models.save_config", lambda _updated: None)
+
+    manager = _FakeSlackManager(
+        {"sakura": SimpleNamespace(client=SimpleNamespace(token="xoxb-sakura"))},
+    )
+    sync = SlackChannelSync()
+
+    await sync.sync(manager)
+
+    assert sync.board_mapping == {"C_ALLOW": "allowed-board"}
+    assert (channels_dir / "allowed-board.jsonl").exists()
+    assert not (channels_dir / "general.jsonl").exists()
+    assert joined_channels == ["C_ALLOW"]

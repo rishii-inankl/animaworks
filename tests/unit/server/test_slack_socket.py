@@ -729,3 +729,19 @@ class TestExternalMessagingChannelConfigMode:
         restored = ExternalMessagingChannelConfig.model_validate(data)
         assert restored.mode == "socket"
         assert restored.anima_mapping == {"C1": "sakura"}
+
+
+def test_slack_channel_allowlist_blocks_unmapped_channel():
+    from server.slack_socket import _is_allowed_slack_channel
+
+    slack_cfg = MagicMock(
+        board_mapping={"C_ALLOWED": "allowed-board", "C_OTHER": "general"},
+        board_outbound_sync=["allowed-board"],
+    )
+    cfg = MagicMock()
+    cfg.external_messaging.slack = slack_cfg
+
+    assert _is_allowed_slack_channel("C_ALLOWED", cfg=cfg) is True
+    assert _is_allowed_slack_channel("C_OTHER", cfg=cfg) is False
+    assert _is_allowed_slack_channel("C_UNKNOWN", cfg=cfg) is False
+    assert _is_allowed_slack_channel("D123", cfg=cfg) is True

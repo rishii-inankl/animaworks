@@ -282,7 +282,9 @@ class SlackChannelSync:
         from core.config.models import load_config
 
         cfg = load_config()
-        default_anima = cfg.external_messaging.slack.default_anima or "sakura"
+        slack_cfg = cfg.external_messaging.slack
+        default_anima = slack_cfg.default_anima or "sakura"
+        allowed_boards = set(slack_cfg.board_outbound_sync or [])
 
         shared_dir = get_shared_dir()
         previous_mapping = dict(self.board_mapping)
@@ -355,6 +357,12 @@ class SlackChannelSync:
             slack_channel_names.add(ch_name)
 
             board_name = ch_name
+            if allowed_boards and board_name not in allowed_boards:
+                logger.debug(
+                    "SlackChannelSync: skipping Slack channel #%s; board not in allowlist",
+                    ch_name,
+                )
+                continue
             if _ensure_board(shared_dir, board_name, ch_name):
                 new_boards += 1
 
@@ -378,6 +386,8 @@ class SlackChannelSync:
         # ── Phase 2: Reverse sync (AnimaWorks boards -> Slack channels) ──
         local_boards = _list_local_boards(shared_dir)
         for board_name in local_boards:
+            if allowed_boards and board_name not in allowed_boards:
+                continue
             if board_name in slack_channel_names:
                 continue  # Already exists in Slack
 
