@@ -29,6 +29,9 @@ logger = logging.getLogger("animaworks.asset_reconciler")
 # Per-anima locks to prevent concurrent generation (bootstrap vs fallback).
 _anima_locks: dict[str, asyncio.Lock] = {}
 
+# Log the global reconciliation-disabled guard only once per process.
+_asset_reconciliation_disabled_logged = False
+
 # Required base assets.  If *any* of these are missing the anima
 # is considered to have incomplete assets.
 REQUIRED_ASSETS: dict[str, str] = {
@@ -355,6 +358,25 @@ async def reconcile_all_assets(
     Returns:
         List of per-anima result dicts.
     """
+    global _asset_reconciliation_disabled_logged
+
+    asset_reconciliation_enabled = True
+    try:
+        from core.config.models import load_config
+
+        asset_reconciliation_enabled = load_config().image_gen.asset_reconciliation_enabled
+    except Exception:
+        logger.debug(
+            "Failed to read image_gen.asset_reconciliation_enabled, using defaults",
+            exc_info=True,
+        )
+
+    if not asset_reconciliation_enabled:
+        if not _asset_reconciliation_disabled_logged:
+            logger.info("Asset reconciliation disabled by image_gen.asset_reconciliation_enabled=false")
+            _asset_reconciliation_disabled_logged = True
+        return []
+
     incomplete = find_animas_with_missing_assets(
         animas_dir,
         enable_3d=enable_3d,
