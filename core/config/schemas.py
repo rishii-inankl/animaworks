@@ -380,6 +380,7 @@ class ImageGenConfig(BaseModel):
     vibe_strength: float = 0.6  # Vibe Transfer strength (0.0-1.0)
     vibe_info_extracted: float = 0.8  # Vibe Transfer information extraction (0.0-1.0)
     enable_3d: bool = True  # Enable 3D model generation (Meshy API)
+    asset_reconciliation_enabled: bool = True  # Enable fallback asset reconciliation loops
     diffusers_text2img_model: str = "auto"
     diffusers_img2img_model: str = "auto"
     diffusers_text2img_model_realistic: str = ""  # Override for realistic style

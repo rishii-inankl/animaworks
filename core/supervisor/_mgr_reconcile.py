@@ -251,20 +251,30 @@ class ReconcileMixin:
     async def _reconcile_assets(self) -> None:
         """Check for and generate missing anima assets during reconciliation."""
         try:
-            from core.asset_reconciler import find_animas_with_missing_assets, reconcile_anima_assets
             from core.config.models import load_config
 
+            asset_reconciliation_enabled = True
             enable_3d = True
             image_style: str = "realistic"
             try:
                 cfg = load_config()
-                enable_3d = cfg.image_gen.enable_3d
-                image_style = cfg.image_gen.image_style
+                image_gen = cfg.image_gen
+                asset_reconciliation_enabled = image_gen.asset_reconciliation_enabled
+                enable_3d = image_gen.enable_3d
+                image_style = image_gen.image_style
             except Exception:
                 logger.debug(
                     "Failed to read image_gen config, using defaults",
                     exc_info=True,
                 )
+
+            if not asset_reconciliation_enabled:
+                if not getattr(self, "_asset_reconciliation_disabled_logged", False):
+                    logger.info("Asset reconciliation disabled by image_gen.asset_reconciliation_enabled=false")
+                    self._asset_reconciliation_disabled_logged = True
+                return
+
+            from core.asset_reconciler import find_animas_with_missing_assets, reconcile_anima_assets
 
             incomplete = find_animas_with_missing_assets(
                 self.animas_dir,
