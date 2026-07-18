@@ -8,6 +8,7 @@ import argparse
 import atexit
 import logging
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -50,6 +51,45 @@ def _write_pid_file() -> None:
     pid_file.parent.mkdir(parents=True, exist_ok=True)
     pid_file.write_text(str(os.getpid()), encoding="utf-8")
     logger.info("PID file written: %s (pid=%d)", pid_file, os.getpid())
+
+
+def _hold_sleep_assertion() -> None:
+    """サーバ存命中は macOS のシステムスリープを抑止する。
+
+    Deep Idle スリープ中の DarkWake（45-60秒）で cron 起動→本体再入眠により、
+    LLMストリーム凍結・DNS解決失敗（nodename nor servname provided）・runner
+    起動フラッピング・朝cron欠落が起きるため（2026-07-15〜18 実測）。
+    caffeinate -w により server プロセス終了で自動解放される。AC電源時のみ有効。
+    観測系の best-effort であり本体起動は止めない（失敗時は warning のみ）。
+    """
+    if sys.platform != "darwin":
+        return
+    caffeinate = shutil.which("caffeinate")
+    if caffeinate is None:
+        logger.warning(
+            "caffeinate not found; system sleep may interrupt scheduled jobs and LLM streams"
+        )
+        return
+    try:
+        proc = subprocess.Popen(
+            [caffeinate, "-s", "-w", str(os.getpid())],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            **subprocess_session_kwargs(),
+        )
+    except OSError as exc:
+        logger.warning(
+            "Failed to spawn caffeinate (pid=%d); system sleep may interrupt "
+            "scheduled jobs and LLM streams: %s",
+            os.getpid(),
+            exc,
+        )
+        return
+    logger.info(
+        "Sleep assertion held: caffeinate pid=%d watching server pid=%d",
+        proc.pid,
+        os.getpid(),
+    )
 
 
 def _remove_pid_file() -> None:
@@ -507,6 +547,7 @@ def _start_foreground(args: argparse.Namespace) -> None:
     _write_pid_file()
     atexit.register(_remove_pid_file)
     _start_pid_watchdog()
+    _hold_sleep_assertion()
 
     from core.config import load_config
     from core.time_utils import configure_timezone
