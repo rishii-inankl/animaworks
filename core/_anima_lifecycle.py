@@ -759,7 +759,21 @@ class LifecycleMixin:
                             original_config = agent.model_config
                             agent.update_model_config(bg_config)
                         try:
-                            result = await agent.run_cycle(prompt, trigger=f"cron:{task_name}")
+                            from core.config.models import load_config as _load_cfg
+
+                            _hard_timeout = _load_cfg().cron.hard_timeout_seconds
+                            try:
+                                # wait_for cancellation reaches Mode C cleanup: the SDK client is
+                                # closed in CodexSDKExecutor finally, and CLI fallback kills its child.
+                                result = await asyncio.wait_for(
+                                    agent.run_cycle(prompt, trigger=f"cron:{task_name}"),
+                                    timeout=float(_hard_timeout),
+                                )
+                            except TimeoutError as exc:
+                                self._handle_cron_hard_timeout(task_name, _hard_timeout)
+                                raise TimeoutError(
+                                    f"Cron task {task_name} hard timeout after {_hard_timeout}s"
+                                ) from exc
                         finally:
                             if original_config is not None:
                                 agent.update_model_config(original_config)
@@ -841,6 +855,20 @@ class LifecycleMixin:
                     self._task_slots["background"] = ""
         finally:
             self._notify_lock_released()
+
+    def _handle_cron_hard_timeout(self, task_name: str, hard_timeout: int) -> None:
+        """Record a cron hard timeout before the normal FAILED path runs."""
+        logger.warning(
+            "[%s] [TIMEOUT] Cron hard timeout task=%s (%ds) — forced termination",
+            self.name,
+            task_name,
+            hard_timeout,
+        )
+        self.memory.append_cron_log(
+            task_name,
+            summary=f"[TIMEOUT] Hard timeout after {hard_timeout}s",
+            duration_ms=hard_timeout * 1000,
+        )
 
     async def run_cron_command(
         self,

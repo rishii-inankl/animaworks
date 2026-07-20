@@ -676,6 +676,17 @@ class HeartbeatConfig(BaseModel):
     )
 
 
+class CronConfig(BaseModel):
+    """Cron LLM task execution settings."""
+
+    hard_timeout_seconds: int = Field(
+        default=1800,
+        ge=60,
+        le=7200,
+        description="Seconds before forcefully terminating a cron LLM task",
+    )
+
+
 # ── Voice Chat Config ───────────────────────────────────────────────────────
 
 
@@ -941,6 +952,7 @@ class AnimaWorksConfig(BaseModel):
     background_task: BackgroundTaskConfig = BackgroundTaskConfig()
     activity_log: ActivityLogConfig = ActivityLogConfig()
     heartbeat: HeartbeatConfig = HeartbeatConfig()
+    cron: CronConfig = CronConfig()
     voice: VoiceConfig = VoiceConfig()
     housekeeping: HousekeepingConfig = HousekeepingConfig()
     inbox: InboxConfig = InboxConfig()
@@ -970,6 +982,7 @@ __all__ = [
     "BackgroundTaskConfig",
     "BackgroundToolConfig",
     "ConsolidationConfig",
+    "CronConfig",
     "CredentialConfig",
     "DEFAULT_ANIMA_MODEL",
     "DEFAULT_CONSOLIDATION_MODEL",

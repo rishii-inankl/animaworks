@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -365,6 +366,13 @@ class TestRunHeartbeat:
 
 
 class TestRunCronTask:
+    def test_cron_hard_timeout_default_when_config_section_missing(self):
+        from core.config.models import AnimaWorksConfig
+
+        config = AnimaWorksConfig.model_validate({})
+
+        assert config.cron.hard_timeout_seconds == 1800
+
     async def test_run_cron_task(self, data_dir, make_anima):
         anima_dir = make_anima("alice")
         shared_dir = data_dir / "shared"
@@ -385,8 +393,85 @@ class TestRunCronTask:
 
             result = await dp.run_cron_task("daily_report", "Generate report")
             assert isinstance(result, CycleResult)
+            dp.agent.run_cycle.assert_awaited_once()
+            assert dp.agent.run_cycle.await_args.kwargs["trigger"] == "cron:daily_report"
+            MockMM.return_value.append_cron_log.assert_called_once_with(
+                "daily_report",
+                summary="done",
+                duration_ms=100,
+                skill_rejections=[],
+            )
             assert dp._status_slots["background"] == "idle"
             MockMM.return_value.archive_and_reset_state.assert_not_called()
+
+    async def test_run_cron_task_hard_timeout_records_failure_and_releases_lane(
+        self,
+        data_dir,
+        make_anima,
+        caplog,
+    ):
+        anima_dir = make_anima("alice")
+        shared_dir = data_dir / "shared"
+        run_cycle_started = asyncio.Event()
+        run_cycle_cancelled = asyncio.Event()
+
+        async def never_returns(*args, **kwargs):
+            run_cycle_started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                run_cycle_cancelled.set()
+
+        real_wait_for = asyncio.wait_for
+
+        async def accelerated_wait_for(awaitable, *, timeout):
+            assert timeout == 1800.0
+            return await real_wait_for(awaitable, timeout=0.01)
+
+        with (
+            patch("core.anima.AgentCore"),
+            patch("core.anima.MemoryManager") as MockMM,
+            patch("core.anima.Messenger"),
+            patch("core._anima_heartbeat.load_prompt", return_value="cron prompt"),
+            patch("core.config.models.load_config") as mock_load_config,
+            patch(
+                "core._anima_lifecycle.asyncio.wait_for",
+                side_effect=accelerated_wait_for,
+            ),
+        ):
+            from core.config.models import AnimaWorksConfig
+
+            MockMM.return_value.read_model_config.return_value = MagicMock()
+            mock_load_config.return_value = AnimaWorksConfig.model_validate({})
+
+            from core.anima import DigitalAnima
+
+            dp = DigitalAnima(anima_dir, shared_dir)
+            _wire_session_type(dp)
+            dp.agent.run_cycle = AsyncMock(side_effect=never_returns)
+
+            with pytest.raises(TimeoutError, match="daily_report hard timeout after 1800s"):
+                await dp.run_cron_task("daily_report", "Generate report")
+
+            assert run_cycle_started.is_set()
+            assert run_cycle_cancelled.is_set()
+            MockMM.return_value.append_cron_log.assert_called_once_with(
+                "daily_report",
+                summary="[TIMEOUT] Hard timeout after 1800s",
+                duration_ms=1_800_000,
+            )
+            assert "[TIMEOUT] Cron hard timeout task=daily_report (1800s)" in caplog.text
+            assert "run_cron_task FAILED task=daily_report" in caplog.text
+            assert dp._cron_idle.is_set()
+            assert not dp._background_lock.locked()
+            assert dp._status_slots["background"] == "idle"
+            assert dp._task_slots["background"] == ""
+
+            dp.agent.run_cycle = AsyncMock(return_value=_make_cycle_result())
+            result = await dp.run_cron_task("daily_report", "Generate report")
+
+            assert isinstance(result, CycleResult)
+            assert result.summary == "done"
 
 
 # ── process_greet ────────────────────────────────────────

@@ -71,6 +71,7 @@ from core.config.schemas import (
     BackgroundToolConfig,
     CommandsPermission,
     ConsolidationConfig,
+    CronConfig,
     CredentialConfig,
     ElevenLabsVoiceConfig,
     ExternalMessagingChannelConfig,
