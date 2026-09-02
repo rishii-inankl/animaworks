@@ -167,7 +167,6 @@ class VectorWorkerManager:
         self.base_url = f"http://{self.host}:{port}"
         self.log_dir.mkdir(parents=True, exist_ok=True)
         log_path = self.log_dir / "vector-worker.log"
-        log_file = open(log_path, "a", encoding="utf-8")  # noqa: SIM115
         env = os.environ.copy()
         env.pop("ANIMAWORKS_VECTOR_URL", None)
         env["ANIMAWORKS_ALLOW_DIRECT_CHROMA"] = "1"
@@ -179,18 +178,17 @@ class VectorWorkerManager:
             self.host,
             "--port",
             str(port),
+            "--log-file",
+            str(log_path),
         ]
-        try:
-            self.process = subprocess.Popen(
-                cmd,
-                cwd=PROJECT_DIR,
-                env=env,
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-                **subprocess_session_kwargs(),
-            )
-        finally:
-            log_file.close()
+        self.process = subprocess.Popen(
+            cmd,
+            cwd=PROJECT_DIR,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            **subprocess_session_kwargs(),
+        )
         try:
             await self._wait_until_healthy()
         except Exception:

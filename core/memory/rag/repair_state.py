@@ -36,7 +36,26 @@ def read_state(anima_name: str, *, animas_dir: Path | None = None) -> dict[str, 
         data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return {}
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        return {}
+    if data.get("status") in {"healthy", "success"}:
+        from core.memory.rag.sqlite_health import quick_check_chroma_sqlite
+
+        health = quick_check_chroma_sqlite(path.parent.parent / "vectordb")
+        if health.corrupt:
+            data.update(
+                {
+                    "status": "corrupt",
+                    "stage": "detect",
+                    "updated_at": iso(),
+                    "last_error": health.error or "; ".join(health.details),
+                }
+            )
+            try:
+                path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            except OSError:
+                pass
+    return data
 
 
 def write_state(anima_name: str, state: dict[str, Any], *, animas_dir: Path | None = None) -> None:

@@ -20,7 +20,12 @@ from pathlib import Path
 from typing import Any
 
 from core.memory.rag import repair_state
-from core.memory.rag.repair_rebuild import full_reindex, quarantine_vectordb
+from core.memory.rag.repair_rebuild import (
+    assert_archive_unchanged,
+    full_reindex,
+    quarantine_vectordb,
+    snapshot_archive_mtimes,
+)
 from core.memory.rag.repair_types import RepairResult
 from core.memory.rag.repair_utils import (
     SINGLE_SHOT_REASONS,
@@ -492,7 +497,13 @@ class RAGRepairService:
             return RepairResult(status="cooldown", anima_name=anima_name, reason=reason)
         if is_repair_locked(anima_name):
             logger.warning("RAG repair request skipped because lock is held: %s", anima_name)
-            return RepairResult(status="locked", anima_name=anima_name, reason=reason)
+            return RepairResult(
+                status="locked",
+                anima_name=anima_name,
+                reason=reason,
+                error=f"repair lock already held for {anima_name}",
+                stage="locked",
+            )
         return None
 
     def _has_active_repair_state(self, anima_name: str) -> bool:
@@ -536,6 +547,7 @@ class RAGRepairService:
                     status="locked",
                     anima_name=anima_name,
                     reason=reason,
+                    error=f"repair lock already held for {anima_name}",
                     stage="locked",
                     state_path=str(repair_state.state_path(anima_name)),
                 )
@@ -561,6 +573,7 @@ class RAGRepairService:
                     last_error=None,
                 )
                 quarantine_path = quarantine_vectordb(anima_name)
+                archive_mtimes = snapshot_archive_mtimes(quarantine_path)
                 repair_state.update_repair_state(
                     anima_name,
                     status="repairing",
@@ -569,6 +582,19 @@ class RAGRepairService:
                     last_quarantine_path=str(quarantine_path) if quarantine_path else None,
                 )
                 chunks = full_reindex(anima_name, include_shared=include_shared)
+                assert_archive_unchanged(quarantine_path, archive_mtimes)
+                from core.memory.rag.sqlite_health import check_anima_vectordb_health_via_worker_or_direct
+
+                health = check_anima_vectordb_health_via_worker_or_direct(
+                    anima_name,
+                    source="repair_post_reindex",
+                    record_repair=False,
+                )
+                if not health.ok or health.status != "ok":
+                    raise RuntimeError(
+                        f"Rebuilt Chroma SQLite failed validation: status={health.status} "
+                        f"detail={health.error or health.details}"
+                    )
                 from core.memory.rag.singleton import reset_vector_store
 
                 repair_state.update_repair_state(

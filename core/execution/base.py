@@ -498,6 +498,8 @@ class ExecutionResult:
     usage: TokenUsage | None = None
     session_rotated: bool = False
     session_rotation_pending: bool = False
+    budget_exceeded: bool = False
+    budget_reason: str = ""
 
 
 class BaseExecutor(ABC):

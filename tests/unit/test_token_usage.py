@@ -70,6 +70,23 @@ def tul(logger_dir: Path) -> TokenUsageLogger:
 
 
 class TestTokenUsageLoggerLog:
+    def test_mode_c_session_helper_records_actual_tool_turns(self, logger_dir: Path):
+        from core._agent_cycle import _log_session_token_usage
+
+        _log_session_token_usage(
+            logger_dir,
+            model="codex/o4-mini",
+            mode="c",
+            trigger="cron:test",
+            usage={"input_tokens": 200_000, "output_tokens": 50},
+            turns=20,
+        )
+
+        usage_file = next((logger_dir / "token_usage").glob("*.jsonl"))
+        entry = json.loads(usage_file.read_text(encoding="utf-8"))
+        assert entry["input_tokens"] == 200_000
+        assert entry["turns"] == 20
+
     def test_log_creates_file(self, tul: TokenUsageLogger, logger_dir: Path):
         tul.log(model="claude-sonnet-4-6", trigger="chat", mode="a", input_tokens=1000, output_tokens=500)
         usage_dir = logger_dir / "token_usage"

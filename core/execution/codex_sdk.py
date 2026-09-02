@@ -68,6 +68,8 @@ _SUBPROCESS_STREAM_LIMIT = 16 * 1024 * 1024  # 16 MB
 
 _CODEX_REASONING_SUMMARY_DEFAULT = "concise"
 _CODEX_REASONING_SUMMARY_VALUES = {"auto", "concise", "detailed", "none"}
+_DEFAULT_CODEX_MAX_INPUT_TOKENS = 250_000
+_DEFAULT_CODEX_MAX_TOOL_CALLS = 20
 
 
 # ── Model name helpers ───────────────────────────────────────
@@ -1054,6 +1056,20 @@ class CodexSDKExecutor(BaseExecutor):
             kwargs["summary"] = summary
         return kwargs
 
+    def _hard_budget(self, max_turns_override: int | None) -> tuple[int, int]:
+        """Resolve Mode C cumulative-input and completed-tool hard limits."""
+        input_limit = max(
+            1,
+            int(getattr(self._model_config, "codex_max_input_tokens_per_run", _DEFAULT_CODEX_MAX_INPUT_TOKENS)),
+        )
+        tool_limit = max(
+            1,
+            int(getattr(self._model_config, "codex_max_tool_calls_per_run", _DEFAULT_CODEX_MAX_TOOL_CALLS)),
+        )
+        if max_turns_override is not None:
+            tool_limit = min(tool_limit, max(1, int(max_turns_override)))
+        return input_limit, tool_limit
+
     def _build_cli_exec_command(self) -> list[str]:
         """Build the `codex exec --json` command used as a runtime fallback."""
         executable = get_codex_executable()
@@ -1314,6 +1330,35 @@ class CodexSDKExecutor(BaseExecutor):
         if self._check_interrupted():
             return ExecutionResult(text="[Session interrupted by user]")
 
+        # Runtime calls provide a tracker.  Consume the SDK event stream so a
+        # completed tool can be observed and the process interrupted at the
+        # hard budget; Thread.run() only returns after Codex's whole tool loop.
+        if tracker is not None and not _should_prefer_cli_exec(trigger):
+            done: dict[str, Any] | None = None
+            async for event in self.execute_streaming(
+                system_prompt=system_prompt,
+                prompt=prompt,
+                tracker=tracker,
+                images=images,
+                prior_messages=prior_messages,
+                max_turns_override=max_turns_override,
+                trigger=trigger,
+                thread_id=thread_id,
+            ):
+                if event.get("type") == "done":
+                    done = event
+            if done is None:
+                return ExecutionResult(text="[Codex SDK stream ended without a result]")
+            return ExecutionResult(
+                text=str(done.get("full_text", "")),
+                result_message=done.get("result_message"),
+                replied_to_from_transcript=set(done.get("replied_to_from_transcript") or set()),
+                tool_call_records=[ToolCallRecord(**record) for record in (done.get("tool_call_records") or [])],
+                usage=TokenUsage(**(done.get("usage") or {})),
+                budget_exceeded=bool(done.get("budget_exceeded")),
+                budget_reason=str(done.get("budget_reason") or ""),
+            )
+
         if _should_prefer_cli_exec(trigger):
             logger.info("Using `codex exec` directly for trigger=%s", trigger)
             return await self._execute_via_cli_exec(prompt, system_prompt, tracker, trigger=trigger)
@@ -1488,6 +1533,8 @@ class CodexSDKExecutor(BaseExecutor):
         usage_acc = TokenUsage()
         completed_turn_count = 0
         thinking_started = False
+        input_budget, tool_budget = self._hard_budget(max_turns_override)
+        budget_reason = ""
 
         def _current_full_text() -> str:
             return "\n".join(
@@ -1528,7 +1575,7 @@ class CodexSDKExecutor(BaseExecutor):
             return {"type": "thinking_end"}
 
         async def _stream_turn(tid: str | None) -> AsyncGenerator[dict[str, Any], None]:
-            nonlocal completed_turn_count, turn_result, active_thread
+            nonlocal budget_reason, completed_turn_count, turn_result, active_thread
             thread = await self._start_or_resume_thread(
                 codex,
                 tid,
@@ -1569,11 +1616,15 @@ class CodexSDKExecutor(BaseExecutor):
                 }
 
             def _usage_from_raw(raw_usage: Any) -> None:
+                nonlocal budget_reason
                 if not raw_usage:
                     return
                 ud = _usage_to_dict(raw_usage)
                 usage_acc.input_tokens = ud.get("input_tokens", 0) or ud.get("prompt_tokens", 0) or 0
                 usage_acc.output_tokens = ud.get("output_tokens", 0) or ud.get("completion_tokens", 0) or 0
+                tracker.update(usage_acc.to_dict(), include_output_in_ratio=False)
+                if usage_acc.input_tokens >= input_budget and not budget_reason:
+                    budget_reason = f"cumulative input token budget reached ({usage_acc.input_tokens}/{input_budget})"
 
             try:
                 while True:
@@ -1769,6 +1820,12 @@ class CodexSDKExecutor(BaseExecutor):
                                     "tool_id": item_id,
                                     "tool_name": tool_name,
                                 }
+                            if len(all_tool_records) >= tool_budget and not budget_reason:
+                                budget_reason = f"tool call budget reached ({len(all_tool_records)}/{tool_budget})"
+                            if budget_reason:
+                                logger.warning("Mode C hard budget interrupt: %s", budget_reason)
+                                tracker.force_threshold()
+                                return
 
                         else:
                             text = _extract_item_text(item)
@@ -1790,6 +1847,10 @@ class CodexSDKExecutor(BaseExecutor):
 
                     if method == "thread/tokenUsage/updated":
                         _usage_from_raw(_get_attr(payload, "token_usage", None))
+                        if budget_reason and not (tool_started - tool_ended):
+                            logger.warning("Mode C hard budget interrupt: %s", budget_reason)
+                            tracker.force_threshold()
+                            return
                         continue
 
                     if method == "turn/completed":
@@ -1922,10 +1983,13 @@ class CodexSDKExecutor(BaseExecutor):
                 full_text = _synthesise_fallback(all_tool_records)
             if turn_result is None and (full_text or all_tool_records):
                 turn_result = CodexResultMessage(
-                    num_turns=max(1, completed_turn_count),
+                    num_turns=max(completed_turn_count, len(all_tool_records), 1),
                     session_id=_get_thread_id(active_thread) or "",
                     usage=usage_acc.to_dict(),
                 )
+            elif turn_result is not None:
+                turn_result.num_turns = max(completed_turn_count, len(all_tool_records), turn_result.num_turns)
+                turn_result.usage = usage_acc.to_dict()
 
             replied_to = self._read_replied_to_file()
             end_chunk = _thinking_end_chunk()
@@ -1938,6 +2002,8 @@ class CodexSDKExecutor(BaseExecutor):
                 "replied_to_from_transcript": replied_to,
                 "tool_call_records": [asdict(r) for r in all_tool_records],
                 "usage": usage_acc.to_dict(),
+                "budget_exceeded": bool(budget_reason),
+                "budget_reason": budget_reason,
             }
         finally:
             await _close_codex_client(codex)

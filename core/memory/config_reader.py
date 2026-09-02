@@ -56,6 +56,8 @@ class ConfigReader:
                 background_credential=resolved.background_credential,
                 max_tokens=resolved.max_tokens,
                 max_turns=resolved.max_turns,
+                codex_max_input_tokens_per_run=resolved.codex_max_input_tokens_per_run,
+                codex_max_tool_calls_per_run=resolved.codex_max_tool_calls_per_run,
                 credential=cred_name,
                 credential_type=cred_type,
                 api_key=credential.api_key or None,

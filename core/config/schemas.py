@@ -82,6 +82,8 @@ class AnimaDefaults(BaseModel):
     background_credential: str | None = None
     max_tokens: int = 8192
     max_turns: int = 10000
+    codex_max_input_tokens_per_run: int = Field(default=250_000, ge=1)
+    codex_max_tool_calls_per_run: int = Field(default=20, ge=1)
     credential: str = "anthropic"
     context_threshold: float = 0.50
     max_chains: int = 2

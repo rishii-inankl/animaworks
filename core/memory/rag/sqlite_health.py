@@ -56,6 +56,11 @@ def quick_check_chroma_sqlite(
     db_path = chroma_sqlite_path(persist_dir)
     if not db_path.exists():
         return SQLiteHealthResult(db_path=db_path, ok=True, status="missing")
+    try:
+        if db_path.stat().st_size == 0:
+            return SQLiteHealthResult(db_path=db_path, ok=False, status="corrupt", error="database file is 0 bytes")
+    except OSError as exc:
+        return SQLiteHealthResult(db_path=db_path, ok=False, status="unreadable", error=str(exc))
 
     try:
         details = (runner or _run_quick_check)(db_path, timeout_seconds)
@@ -71,7 +76,7 @@ def quick_check_chroma_sqlite(
         return SQLiteHealthResult(db_path=db_path, ok=False, status="unreadable", error=str(exc))
 
     normalized = tuple(item.strip() for item in details if item.strip())
-    if normalized == ("ok",):
+    if normalized == ("ok", "collections"):
         return SQLiteHealthResult(db_path=db_path, ok=True, status="ok", details=normalized)
     return SQLiteHealthResult(db_path=db_path, ok=False, status="corrupt", details=normalized)
 
@@ -251,7 +256,7 @@ def check_anima_vectordb_health_via_worker_or_direct(
 
 
 def _run_quick_check(db_path: Path, timeout_seconds: float) -> tuple[str, ...]:
-    with _connect(db_path, timeout_seconds) as conn:
+    with _connect_readonly(db_path, timeout_seconds) as conn:
         conn.execute(f"PRAGMA busy_timeout = {int(timeout_seconds * 1000)}")
         deadline = time.monotonic() + timeout_seconds
         timed_out = False
@@ -266,17 +271,26 @@ def _run_quick_check(db_path: Path, timeout_seconds: float) -> tuple[str, ...]:
         conn.set_progress_handler(progress_handler, 1000)
         try:
             rows = conn.execute("PRAGMA quick_check").fetchall()
+            has_collections = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='collections'"
+            ).fetchone()
         except sqlite3.OperationalError as exc:
             if timed_out:
                 raise TimeoutError(f"quick_check exceeded {timeout_seconds:.1f}s for {db_path}") from exc
             raise
         finally:
             conn.set_progress_handler(None, 0)
-    return tuple(str(row[0]) for row in rows)
+    result = tuple(str(row[0]) for row in rows)
+    return result + (("collections",) if has_collections else ("missing collections table",))
 
 
 def _connect(db_path: Path, timeout_seconds: float) -> sqlite3.Connection:
     uri = f"file:{db_path}?mode=rw"
+    return sqlite3.connect(uri, uri=True, timeout=timeout_seconds)
+
+
+def _connect_readonly(db_path: Path, timeout_seconds: float) -> sqlite3.Connection:
+    uri = f"file:{db_path}?mode=ro&immutable=1"
     return sqlite3.connect(uri, uri=True, timeout=timeout_seconds)
 
 

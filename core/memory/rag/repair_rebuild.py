@@ -16,16 +16,29 @@ logger = logging.getLogger("animaworks.rag.repair")
 
 
 def quarantine_vectordb(anima_name: str) -> Path | None:
+    """Close the owning worker's client, then move the derived database.
+
+    The repair process normally holds only an ``HttpVectorStore``.  Resetting
+    that local proxy does not close Chroma's native handles in the vector
+    worker, so the worker must acknowledge a quiescing reset before the move.
+    """
     import gc
 
     from core.memory.rag.singleton import reset_vector_store
     from core.paths import get_anima_vectordb_dir
+
+    worker_url = os.environ.get("ANIMAWORKS_VECTOR_URL")
+    worker_quiesced = False
+    if worker_url:
+        worker_quiesced = _set_worker_quiesced(worker_url, anima_name, quiesced=True)
 
     reset_vector_store(anima_name)
     gc.collect()
 
     source = get_anima_vectordb_dir(anima_name)
     if not source.exists():
+        if worker_quiesced:
+            _set_worker_quiesced(worker_url, anima_name, quiesced=False)
         return None
 
     archive_dir = source.parent / "archive"
@@ -36,8 +49,43 @@ def quarantine_vectordb(anima_name: str) -> Path | None:
     while dest.exists():
         suffix += 1
         dest = archive_dir / f"vectordb-corrupt-{stamp}-{suffix}"
-    shutil.move(str(source), str(dest))
-    return dest
+    try:
+        shutil.move(str(source), str(dest))
+        return dest
+    finally:
+        if worker_quiesced:
+            _set_worker_quiesced(worker_url, anima_name, quiesced=False)
+
+
+def _set_worker_quiesced(vector_url: str, anima_name: str, *, quiesced: bool) -> bool:
+    """Synchronously change worker state and require explicit acknowledgement."""
+    import httpx
+
+    action = "quiesce" if quiesced else "resume"
+    try:
+        with httpx.Client(base_url=vector_url.rstrip("/"), timeout=30.0) as client:
+            response = client.post(f"/admin/{action}", json={"anima_name": anima_name})
+            response.raise_for_status()
+            payload = response.json()
+    except Exception as exc:
+        raise RuntimeError(f"Vector worker failed to {action} {anima_name}: {exc}") from exc
+    if payload.get("status") != action or payload.get("anima_name") != anima_name:
+        raise RuntimeError(f"Vector worker did not acknowledge {action} for {anima_name}: {payload!r}")
+    return quiesced
+
+
+def snapshot_archive_mtimes(path: Path | None) -> dict[Path, int]:
+    """Capture nanosecond mtimes so ghost writes are detectable after reindex."""
+    if path is None or not path.exists():
+        return {}
+    return {item.relative_to(path): item.stat().st_mtime_ns for item in path.rglob("*") if item.is_file()}
+
+
+def assert_archive_unchanged(path: Path | None, snapshot: dict[Path, int]) -> None:
+    """Fail repair if any quarantined file was created, removed, or modified."""
+    current = snapshot_archive_mtimes(path)
+    if current != snapshot:
+        raise RuntimeError(f"Quarantined vector DB changed during reindex: {path}")
 
 
 def full_reindex(anima_name: str, *, include_shared: bool) -> int:

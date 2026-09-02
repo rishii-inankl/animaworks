@@ -280,6 +280,19 @@ def test_background_duplicate_request_is_not_started_twice(data_dir: Path):
     assert state["status"] == "requested"
 
 
+def test_repair_lock_failure_is_explicit(data_dir: Path, monkeypatch):
+    anima_dir = data_dir / "animas" / "sora"
+    (anima_dir / "state").mkdir(parents=True)
+    monkeypatch.setattr("core.memory.rag.repair_service.is_repair_locked", lambda _name: True)
+
+    result = RAGRepairService(enabled=True).repair_anima_if_allowed(
+        "sora", reason="sqlite_malformed", source="test"
+    )
+
+    assert result.status == "locked"
+    assert result.error == "repair lock already held for sora"
+
+
 def test_repair_quarantines_vectordb_and_reindexes(data_dir: Path, monkeypatch):
     anima_dir = data_dir / "animas" / "sora"
     (anima_dir / "knowledge").mkdir(parents=True)
@@ -306,6 +319,11 @@ def test_repair_quarantines_vectordb_and_reindexes(data_dir: Path, monkeypatch):
     monkeypatch.setattr("core.memory.rag.MemoryIndexer", FakeIndexer)
     monkeypatch.setenv("ANIMAWORKS_VECTOR_URL", "http://worker")
     monkeypatch.setattr("core.memory.rag.singleton.get_vector_store", lambda anima_name=None: object())
+    monkeypatch.setattr("core.memory.rag.repair_rebuild._set_worker_quiesced", lambda *args, **kwargs: kwargs["quiesced"])
+    monkeypatch.setattr(
+        "core.memory.rag.sqlite_health.check_anima_vectordb_health_via_worker_or_direct",
+        lambda *args, **kwargs: type("Health", (), {"ok": True, "status": "ok", "error": None, "details": ()})(),
+    )
 
     service = RAGRepairService(enabled=True, threshold=2, window_minutes=5, cooldown_minutes=60)
     result = service.repair_anima(
@@ -358,6 +376,11 @@ def test_repair_reindexes_shared_collections_when_requested(data_dir: Path, monk
     monkeypatch.setattr("core.memory.rag.MemoryIndexer", FakeIndexer)
     monkeypatch.setenv("ANIMAWORKS_VECTOR_URL", "http://worker")
     monkeypatch.setattr("core.memory.rag.singleton.get_vector_store", lambda anima_name=None: object())
+    monkeypatch.setattr("core.memory.rag.repair_rebuild._set_worker_quiesced", lambda *args, **kwargs: kwargs["quiesced"])
+    monkeypatch.setattr(
+        "core.memory.rag.sqlite_health.check_anima_vectordb_health_via_worker_or_direct",
+        lambda *args, **kwargs: type("Health", (), {"ok": True, "status": "ok", "error": None, "details": ()})(),
+    )
 
     result = RAGRepairService(enabled=True).repair_anima(
         "sora",

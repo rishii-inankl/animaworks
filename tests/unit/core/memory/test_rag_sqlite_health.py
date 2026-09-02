@@ -26,14 +26,52 @@ def test_quick_check_missing_chroma_db_is_healthy(tmp_path: Path) -> None:
 def test_quick_check_valid_chroma_sqlite_db(tmp_path: Path) -> None:
     db_path = chroma_sqlite_path(tmp_path)
     with sqlite3.connect(db_path) as conn:
-        conn.execute("CREATE TABLE t(id INTEGER PRIMARY KEY, value TEXT)")
-        conn.execute("INSERT INTO t(value) VALUES ('ok')")
+        conn.execute("CREATE TABLE collections(id INTEGER PRIMARY KEY, name TEXT)")
+        conn.execute("INSERT INTO collections(name) VALUES ('ok')")
 
     result = quick_check_chroma_sqlite(tmp_path)
 
     assert result.ok is True
     assert result.status == "ok"
-    assert result.details == ("ok",)
+    assert result.details == ("ok", "collections")
+
+
+def test_quick_check_rejects_zero_byte_db(tmp_path: Path) -> None:
+    chroma_sqlite_path(tmp_path).touch()
+
+    result = quick_check_chroma_sqlite(tmp_path)
+
+    assert result.corrupt is True
+    assert result.error == "database file is 0 bytes"
+
+
+def test_quick_check_rejects_missing_collections_table(tmp_path: Path) -> None:
+    db_path = chroma_sqlite_path(tmp_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE unrelated(id INTEGER PRIMARY KEY)")
+
+    result = quick_check_chroma_sqlite(tmp_path)
+
+    assert result.corrupt is True
+    assert "missing collections table" in result.details
+
+
+def test_repair_state_cannot_remain_healthy_for_zero_byte_db(tmp_path: Path) -> None:
+    import json
+
+    from core.memory.rag.repair_state import read_state
+
+    anima_dir = tmp_path / "sora"
+    (anima_dir / "state").mkdir(parents=True)
+    (anima_dir / "vectordb").mkdir()
+    (anima_dir / "vectordb" / "chroma.sqlite3").touch()
+    state_path = anima_dir / "state" / "rag_repair.json"
+    state_path.write_text('{"status":"healthy","stage":"complete"}\n', encoding="utf-8")
+
+    state = read_state("sora", animas_dir=tmp_path)
+
+    assert state["status"] == "corrupt"
+    assert json.loads(state_path.read_text(encoding="utf-8"))["status"] == "corrupt"
 
 
 def test_configure_chroma_sqlite_pragmas_sets_wal(tmp_path: Path) -> None:

@@ -370,6 +370,7 @@ class CycleMixin:
                 prompt=prompt,
                 system_prompt=system_prompt,
                 tracker=tracker,
+                shortterm=shortterm,
                 trigger=trigger,
                 images=images,
                 max_turns_override=max_turns_override,
@@ -390,7 +391,9 @@ class CycleMixin:
                         timestamp=now_iso(),
                         trigger=trigger,
                         original_prompt=prompt,
-                        accumulated_response=result.text,
+                        accumulated_response=(
+                            result.text + (f"\n\n[Mode C handoff] {result.budget_reason}" if result.budget_exceeded else "")
+                        ).strip(),
                         context_usage_ratio=tracker.usage_ratio,
                         turn_count=result.result_message.num_turns if result.result_message else 0,
                     )
@@ -403,6 +406,19 @@ class CycleMixin:
                     logger.debug("Failed to clear Codex thread ID after Mode C threshold", exc_info=True)
             elif uses_chat_session:
                 shortterm.clear()
+            if result.budget_exceeded and not uses_chat_session:
+                shortterm.clear()
+                shortterm.save(
+                    SessionState(
+                        session_id=result.result_message.session_id if result.result_message else "",
+                        timestamp=now_iso(),
+                        trigger=trigger,
+                        original_prompt=prompt,
+                        accumulated_response=(result.text + "\n\n[Mode C handoff] " + result.budget_reason).strip(),
+                        context_usage_ratio=tracker.usage_ratio,
+                        turn_count=result.result_message.num_turns if result.result_message else 0,
+                    )
+                )
             duration_ms = int((time.monotonic() - start) * 1000)
             logger.info(
                 "run_cycle END (c) trigger=%s duration_ms=%d response_len=%d",
@@ -418,6 +434,7 @@ class CycleMixin:
                 trigger=trigger,
                 usage=_c_usage,
                 duration_ms=duration_ms,
+                turns=result.result_message.num_turns if result.result_message else len(result.tool_call_records),
             )
             return CycleResult(
                 trigger=trigger,
@@ -965,6 +982,7 @@ class CycleMixin:
         all_tool_call_records: list[dict] = []
         result_message: Any = None
         _stream_force_chain = False
+        _stream_budget_reason = ""
         _stream_usage: dict[str, int] = {
             "input_tokens": 0,
             "output_tokens": 0,
@@ -1006,6 +1024,8 @@ class CycleMixin:
                         # Capture force_chain from S mode auto-compact
                         if chunk.get("force_chain", False):
                             _stream_force_chain = True
+                        if chunk.get("budget_exceeded", False):
+                            _stream_budget_reason = str(chunk.get("budget_reason") or "Mode C hard budget reached")
                         stream_succeeded = True
                     elif chunk["type"] == "tool_end" and checkpoint_enabled:
                         record = chunk.get("record")
@@ -1178,7 +1198,10 @@ class CycleMixin:
                     timestamp=now_iso(),
                     trigger=trigger,
                     original_prompt=prompt,
-                    accumulated_response="\n".join(full_text_parts),
+                    accumulated_response=(
+                        "\n".join(full_text_parts)
+                        + (f"\n\n[Mode C handoff] {_stream_budget_reason}" if _stream_budget_reason else "")
+                    ).strip(),
                     context_usage_ratio=tracker.usage_ratio,
                     turn_count=result_message.num_turns if result_message else 0,
                 )
@@ -1206,6 +1229,21 @@ class CycleMixin:
                     logger.debug("Failed to clear Codex thread ID for deferred chain", exc_info=True)
         elif uses_chat_session:
             shortterm.clear()
+        if _stream_budget_reason and not uses_chat_session:
+            shortterm.clear()
+            shortterm.save(
+                SessionState(
+                    session_id=result_message.session_id if result_message else "",
+                    timestamp=now_iso(),
+                    trigger=trigger,
+                    original_prompt=prompt,
+                    accumulated_response=(
+                        "\n".join(full_text_parts) + f"\n\n[Mode C handoff] {_stream_budget_reason}"
+                    ).strip(),
+                    context_usage_ratio=tracker.usage_ratio,
+                    turn_count=result_message.num_turns if result_message else 0,
+                )
+            )
 
         _save_prompt_log_end(
             self.anima_dir,

@@ -77,6 +77,8 @@ class ModelConfig(BaseModel):
     fallback_model: str | None = None
     max_tokens: int = 8192
     max_turns: int = 10000
+    codex_max_input_tokens_per_run: int = 250_000
+    codex_max_tool_calls_per_run: int = 20
     credential: str | None = None  # resolved credential name from config.json
     credential_type: str | None = None  # resolved credential type (api_key, codex_login, codex_azure, ...)
     api_key: str | None = None  # direct API key (resolved from config.json)

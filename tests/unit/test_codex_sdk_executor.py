@@ -109,6 +109,13 @@ def _mock_stream_thread(thread_id: str, events):
 
 
 class TestHelpers:
+    def test_hard_budget_defaults_configuration_and_max_turns_override(self, executor):
+        assert executor._hard_budget(None) == (250_000, 20)
+        executor._model_config.codex_max_input_tokens_per_run = 300_000
+        executor._model_config.codex_max_tool_calls_per_run = 30
+        assert executor._hard_budget(None) == (300_000, 30)
+        assert executor._hard_budget(7) == (300_000, 7)
+
     def test_resolve_codex_model_strips_prefix(self):
         assert _resolve_codex_model("codex/o4-mini") == "o4-mini"
         assert _resolve_codex_model("codex/gpt-4.1") == "gpt-4.1"
@@ -831,6 +838,77 @@ class TestBlockingExecution:
 
 class TestStreamingExecution:
     @pytest.mark.asyncio
+    async def test_mode_c_hard_budget_stops_fifty_tool_fixture_at_twenty(self, executor):
+        events = []
+        for index in range(1, 51):
+            events.append(
+                SimpleNamespace(
+                    method="thread/tokenUsage/updated",
+                    payload=SimpleNamespace(
+                        thread_id="budget-thread",
+                        token_usage=SimpleNamespace(
+                            total=SimpleNamespace(input_tokens=index * 10_000, output_tokens=index, cached_input_tokens=0)
+                        )
+                    ),
+                )
+            )
+            events.append(
+                SimpleNamespace(
+                    method="item/completed",
+                    payload=SimpleNamespace(
+                        thread_id="budget-thread",
+                        item=SimpleNamespace(
+                            type="commandExecution",
+                            id=f"cmd-{index}",
+                            command=f"tool-{index}",
+                            aggregated_output="ok",
+                            exit_code=0,
+                            status="completed",
+                        )
+                    ),
+                )
+            )
+
+        mock_thread = _mock_stream_thread("budget-thread", events)
+        mock_codex = _mock_codex(mock_thread)
+        tracker = ContextTracker(model="codex/o4-mini")
+
+        with patch.object(executor, "_create_codex_client", return_value=mock_codex):
+            result = await executor.execute(prompt="use 50 tools", tracker=tracker)
+
+        assert result.budget_exceeded is True
+        assert result.budget_reason == "tool call budget reached (20/20)"
+        assert len(result.tool_call_records) == 20
+        assert result.result_message.num_turns == 20
+        assert result.usage.input_tokens == 200_000
+        assert tracker._input_tokens == 200_000
+
+    @pytest.mark.asyncio
+    async def test_mode_c_hard_budget_stops_at_cumulative_input_limit(self, executor):
+        events = [
+            SimpleNamespace(
+                method="thread/tokenUsage/updated",
+                payload=SimpleNamespace(
+                    thread_id="budget-thread",
+                    token_usage=SimpleNamespace(
+                        total=SimpleNamespace(input_tokens=250_000, output_tokens=17, cached_input_tokens=0)
+                    ),
+                ),
+            )
+        ]
+        mock_thread = _mock_stream_thread("budget-thread", events)
+        mock_codex = _mock_codex(mock_thread)
+        tracker = ContextTracker(model="codex/o4-mini")
+
+        with patch.object(executor, "_create_codex_client", return_value=mock_codex):
+            result = await executor.execute(prompt="large run", tracker=tracker)
+
+        assert result.budget_exceeded is True
+        assert result.budget_reason == "cumulative input token budget reached (250000/250000)"
+        assert result.usage.input_tokens == 250_000
+        assert tracker._input_tokens == 250_000
+
+    @pytest.mark.asyncio
     async def test_stream_yields_events(self, executor, anima_dir):
         msg_item = MagicMock(spec=["type", "id", "text"])
         msg_item.type = "agent_message"
@@ -869,7 +947,7 @@ class TestStreamingExecution:
         done_ev = next(e for e in events if e["type"] == "done")
         assert "Streamed text" in done_ev["full_text"]
         assert done_ev["result_message"].num_turns == 1
-        assert tracker.usage_ratio == 0.0
+        assert tracker.usage_ratio == 100 / tracker.context_window
 
     @pytest.mark.asyncio
     async def test_stream_falls_back_to_cli_exec_on_fatal_sdk_error(self, executor):
