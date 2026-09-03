@@ -13,6 +13,7 @@ import structlog
 from core.logging_config import (
     get_request_id,
     set_request_id,
+    setup_anima_logging,
     setup_logging,
 )
 
@@ -143,3 +144,23 @@ class TestSetupLogging:
             assert data.get("request_id") == "test-req-42"
 
         structlog.contextvars.clear_contextvars()
+
+
+def test_anima_budget_warning_is_mirrored_to_main_log(tmp_path):
+    """Worker budget warnings remain visible in the supervisor log."""
+    budget_logger = logging.getLogger("animaworks.budget")
+    original_handlers = list(budget_logger.handlers)
+    try:
+        setup_anima_logging("kaede", tmp_path, also_to_console=False)
+        budget_logger.warning("Mode C hard budget interrupt: tool call budget reached (20/20)")
+
+        content = (tmp_path / "animaworks.log").read_text(encoding="utf-8")
+        assert "[kaede]" in content
+        assert "Mode C hard budget interrupt" in content
+        assert "tool call budget reached (20/20)" in content
+    finally:
+        for handler in list(budget_logger.handlers):
+            if handler not in original_handlers:
+                budget_logger.removeHandler(handler)
+                handler.close()
+        logging.getLogger().handlers.clear()

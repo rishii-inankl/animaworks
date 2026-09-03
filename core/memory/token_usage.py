@@ -136,6 +136,8 @@ class TokenUsageLogger:
         turns: int = 0,
         chains: int = 0,
         duration_ms: int = 0,
+        budget_exceeded: bool = False,
+        budget_reason: str = "",
     ) -> None:
         """Log a single session's token usage."""
         now = now_local()
@@ -166,6 +168,9 @@ class TokenUsageLogger:
             entry["cache_write_tokens"] = cache_write_tokens
         if chains:
             entry["chains"] = chains
+        if budget_exceeded:
+            entry["budget_exceeded"] = True
+            entry["budget_reason"] = budget_reason
 
         path = self._dir / f"{now.strftime('%Y-%m-%d')}.jsonl"
         try:

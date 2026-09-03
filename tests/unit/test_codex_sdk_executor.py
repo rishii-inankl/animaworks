@@ -109,11 +109,11 @@ def _mock_stream_thread(thread_id: str, events):
 
 
 class TestHelpers:
-    def test_hard_budget_defaults_configuration_and_max_turns_override(self, executor):
-        assert executor._hard_budget(None) == (250_000, 20)
+    def test_hard_budget_defaults_and_explicit_tool_override(self, executor):
+        assert executor._hard_budget() == (1_200_000, 20)
         executor._model_config.codex_max_input_tokens_per_run = 300_000
         executor._model_config.codex_max_tool_calls_per_run = 30
-        assert executor._hard_budget(None) == (300_000, 30)
+        assert executor._hard_budget() == (300_000, 30)
         assert executor._hard_budget(7) == (300_000, 7)
 
     def test_resolve_codex_model_strips_prefix(self):
@@ -874,7 +874,11 @@ class TestStreamingExecution:
         tracker = ContextTracker(model="codex/o4-mini")
 
         with patch.object(executor, "_create_codex_client", return_value=mock_codex):
-            result = await executor.execute(prompt="use 50 tools", tracker=tracker)
+            result = await executor.execute(
+                prompt="use 50 tools",
+                tracker=tracker,
+                max_turns_override=3,
+            )
 
         assert result.budget_exceeded is True
         assert result.budget_reason == "tool call budget reached (20/20)"
@@ -885,6 +889,7 @@ class TestStreamingExecution:
 
     @pytest.mark.asyncio
     async def test_mode_c_hard_budget_stops_at_cumulative_input_limit(self, executor):
+        executor._model_config.codex_max_input_tokens_per_run = 250_000
         events = [
             SimpleNamespace(
                 method="thread/tokenUsage/updated",

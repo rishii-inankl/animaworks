@@ -65,13 +65,20 @@ MEMORY_TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "read_memory_file",
-        "description": "Read a file from the anima's memory directory by relative path.",
+        "description": (
+            "Read a file from the anima's memory directory by relative path. "
+            "Shared operating procedures are available read-only as "
+            "shared_procedures/<filename>.md."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Relative path within anima dir",
+                    "description": (
+                        "Relative path within anima dir, or "
+                        "shared_procedures/<filename>.md for a shared procedure"
+                    ),
                 },
             },
             "required": ["path"],

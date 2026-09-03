@@ -183,6 +183,25 @@ class AnimaNameFilter(logging.Filter):
         return True
 
 
+class _SharedMainLogHandler(logging.Handler):
+    """Append each record to the current supervisor log path.
+
+    Opening per emit avoids keeping a stale inode after the supervisor's
+    rotating handler renames ``animaworks.log``.
+    """
+
+    def __init__(self, path: Path) -> None:
+        super().__init__(level=logging.WARNING)
+        self._path = path
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            with self._path.open("a", encoding="utf-8") as stream:
+                stream.write(self.format(record) + "\n")
+        except Exception:
+            self.handleError(record)
+
+
 def setup_anima_logging(
     anima_name: str,
     log_dir: Path,
@@ -244,6 +263,25 @@ def setup_anima_logging(
     file_handler.addFilter(anima_filter)
     file_handler.suffix = "%Y%m%d.log"  # Match filename format
     root.addHandler(file_handler)
+
+    # Budget interrupts happen inside runner subprocesses, whose root logger
+    # normally writes only to the per-anima log.  Mirror this one high-value
+    # warning stream into the supervisor log so operational health checks can
+    # see a truncated cron/heartbeat without scraping every worker log.
+    budget_log = logging.getLogger("animaworks.budget")
+    for existing in list(budget_log.handlers):
+        if getattr(existing, "_animaworks_global_budget_handler", False):
+            budget_log.removeHandler(existing)
+            existing.close()
+    global_budget_handler = _SharedMainLogHandler(log_dir / "animaworks.log")
+    global_budget_handler.setFormatter(
+        logging.Formatter(
+            fmt=f"%(asctime)s [%(levelname)s] %(name)s [{anima_name}]: %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    )
+    setattr(global_budget_handler, "_animaworks_global_budget_handler", True)
+    budget_log.addHandler(global_budget_handler)
 
     # Create/update current.log symlink
     current_link = anima_log_dir / "current.log"

@@ -64,10 +64,13 @@ def _log_session_token_usage(
     duration_ms: int = 0,
     turns: int = 0,
     chains: int = 0,
+    budget_exceeded: bool = False,
+    budget_reason: str = "",
 ) -> None:
     """Fire-and-forget token usage log entry."""
-    if not usage or not any(usage.values()):
+    if (not usage or not any(usage.values())) and not budget_exceeded:
         return
+    usage = usage or {}
     try:
         from core.memory.token_usage import TokenUsageLogger
 
@@ -83,6 +86,8 @@ def _log_session_token_usage(
             turns=turns,
             chains=chains,
             duration_ms=duration_ms,
+            budget_exceeded=budget_exceeded,
+            budget_reason=budget_reason,
         )
     except Exception:
         logger.debug("Failed to log token usage", exc_info=True)
@@ -435,6 +440,8 @@ class CycleMixin:
                 usage=_c_usage,
                 duration_ms=duration_ms,
                 turns=result.result_message.num_turns if result.result_message else len(result.tool_call_records),
+                budget_exceeded=result.budget_exceeded,
+                budget_reason=result.budget_reason,
             )
             return CycleResult(
                 trigger=trigger,
@@ -446,6 +453,8 @@ class CycleMixin:
                 context_threshold=tracker.threshold,
                 tool_call_records=_tool_records_to_dicts(result),
                 usage=_c_usage,
+                budget_exceeded=result.budget_exceeded,
+                budget_reason=result.budget_reason,
             )
 
         # ── Mode D: Cursor Agent CLI ─────────────────────
@@ -1275,6 +1284,8 @@ class CycleMixin:
             duration_ms=duration_ms,
             turns=total_turns,
             chains=chain_count if session_chained else 0,
+            budget_exceeded=bool(_stream_budget_reason),
+            budget_reason=_stream_budget_reason,
         )
         yield {
             "type": "cycle_done",
@@ -1291,5 +1302,7 @@ class CycleMixin:
                 total_turns=total_turns,
                 tool_call_records=all_tool_call_records,
                 usage=_final_usage,
+                budget_exceeded=bool(_stream_budget_reason),
+                budget_reason=_stream_budget_reason,
             ).model_dump(mode="json"),
         }

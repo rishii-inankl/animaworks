@@ -47,6 +47,7 @@ from core.prompt.context import ContextTracker
 from core.schemas import ImageData, ModelConfig
 
 logger = logging.getLogger("animaworks.execution.codex_sdk")
+budget_logger = logging.getLogger("animaworks.budget")
 
 __all__ = ["CodexSDKExecutor", "clear_codex_thread_id", "clear_codex_thread_ids", "is_codex_sdk_available"]
 
@@ -68,7 +69,7 @@ _SUBPROCESS_STREAM_LIMIT = 16 * 1024 * 1024  # 16 MB
 
 _CODEX_REASONING_SUMMARY_DEFAULT = "concise"
 _CODEX_REASONING_SUMMARY_VALUES = {"auto", "concise", "detailed", "none"}
-_DEFAULT_CODEX_MAX_INPUT_TOKENS = 250_000
+_DEFAULT_CODEX_MAX_INPUT_TOKENS = 1_200_000
 _DEFAULT_CODEX_MAX_TOOL_CALLS = 20
 
 
@@ -1056,8 +1057,14 @@ class CodexSDKExecutor(BaseExecutor):
             kwargs["summary"] = summary
         return kwargs
 
-    def _hard_budget(self, max_turns_override: int | None) -> tuple[int, int]:
-        """Resolve Mode C cumulative-input and completed-tool hard limits."""
+    def _hard_budget(self, max_tool_calls_override: int | None = None) -> tuple[int, int]:
+        """Resolve Mode C cumulative-input and completed-tool hard limits.
+
+        ``max_turns_override`` deliberately does not feed this method.  That
+        value controls executor turns/phases at callers such as heartbeat and
+        consolidation; it is not a completed-tool limit.  A smaller tool cap
+        is applied only through the explicitly named override here.
+        """
         input_limit = max(
             1,
             int(getattr(self._model_config, "codex_max_input_tokens_per_run", _DEFAULT_CODEX_MAX_INPUT_TOKENS)),
@@ -1066,8 +1073,8 @@ class CodexSDKExecutor(BaseExecutor):
             1,
             int(getattr(self._model_config, "codex_max_tool_calls_per_run", _DEFAULT_CODEX_MAX_TOOL_CALLS)),
         )
-        if max_turns_override is not None:
-            tool_limit = min(tool_limit, max(1, int(max_turns_override)))
+        if max_tool_calls_override is not None:
+            tool_limit = min(tool_limit, max(1, int(max_tool_calls_override)))
         return input_limit, tool_limit
 
     def _build_cli_exec_command(self) -> list[str]:
@@ -1324,6 +1331,7 @@ class CodexSDKExecutor(BaseExecutor):
         images: list[ImageData] | None = None,
         prior_messages: list[dict[str, Any]] | None = None,
         max_turns_override: int | None = None,
+        max_tool_calls_override: int | None = None,
         thread_id: str = "default",
     ) -> ExecutionResult:
         """Run a session via Codex SDK (blocking mode)."""
@@ -1342,6 +1350,7 @@ class CodexSDKExecutor(BaseExecutor):
                 images=images,
                 prior_messages=prior_messages,
                 max_turns_override=max_turns_override,
+                max_tool_calls_override=max_tool_calls_override,
                 trigger=trigger,
                 thread_id=thread_id,
             ):
@@ -1473,6 +1482,7 @@ class CodexSDKExecutor(BaseExecutor):
         images: list[ImageData] | None = None,
         prior_messages: list[dict[str, Any]] | None = None,
         max_turns_override: int | None = None,
+        max_tool_calls_override: int | None = None,
         trigger: str = "",
         thread_id: str = "default",
     ) -> AsyncGenerator[dict[str, Any], None]:
@@ -1533,7 +1543,8 @@ class CodexSDKExecutor(BaseExecutor):
         usage_acc = TokenUsage()
         completed_turn_count = 0
         thinking_started = False
-        input_budget, tool_budget = self._hard_budget(max_turns_override)
+        # max_turns_override is an executor/phase turn cap, not a tool cap.
+        input_budget, tool_budget = self._hard_budget(max_tool_calls_override)
         budget_reason = ""
 
         def _current_full_text() -> str:
@@ -1823,7 +1834,7 @@ class CodexSDKExecutor(BaseExecutor):
                             if len(all_tool_records) >= tool_budget and not budget_reason:
                                 budget_reason = f"tool call budget reached ({len(all_tool_records)}/{tool_budget})"
                             if budget_reason:
-                                logger.warning("Mode C hard budget interrupt: %s", budget_reason)
+                                budget_logger.warning("Mode C hard budget interrupt: %s", budget_reason)
                                 tracker.force_threshold()
                                 return
 
@@ -1848,7 +1859,7 @@ class CodexSDKExecutor(BaseExecutor):
                     if method == "thread/tokenUsage/updated":
                         _usage_from_raw(_get_attr(payload, "token_usage", None))
                         if budget_reason and not (tool_started - tool_ended):
-                            logger.warning("Mode C hard budget interrupt: %s", budget_reason)
+                            budget_logger.warning("Mode C hard budget interrupt: %s", budget_reason)
                             tracker.force_threshold()
                             return
                         continue

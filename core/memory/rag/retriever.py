@@ -374,6 +374,14 @@ class MemoryRetriever:
         Returns:
             List of (doc_id, content, score, metadata) tuples
         """
+        # Empty scopes (especially a new anima's facts scope) legitimately
+        # have no Chroma collection yet.  Avoid an exception-and-WARNING on
+        # every heartbeat; the indexer will create it on the first upsert.
+        collection_exists = getattr(self.indexer, "_collection_exists", None)
+        if callable(collection_exists) and not collection_exists(collection_name):
+            logger.debug("Vector collection not created yet; skipping search: %s", collection_name)
+            return []
+
         # Generate query embedding
         embedding = self.indexer._generate_embeddings([query])[0]
 

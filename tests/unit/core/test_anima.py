@@ -404,6 +404,38 @@ class TestRunCronTask:
             assert dp._status_slots["background"] == "idle"
             MockMM.return_value.archive_and_reset_state.assert_not_called()
 
+    async def test_run_cron_task_prefixes_budget_interrupt_in_cron_log(self, data_dir, make_anima):
+        anima_dir = make_anima("alice")
+        shared_dir = data_dir / "shared"
+
+        with (
+            patch("core.anima.AgentCore"),
+            patch("core.anima.MemoryManager") as MockMM,
+            patch("core.anima.Messenger"),
+            patch("core._anima_heartbeat.load_prompt", return_value="cron prompt"),
+        ):
+            MockMM.return_value.read_model_config.return_value = MagicMock()
+            from core.anima import DigitalAnima
+
+            dp = DigitalAnima(anima_dir, shared_dir)
+            _wire_session_type(dp)
+            dp.agent.run_cycle = AsyncMock(
+                return_value=_make_cycle_result(
+                    summary="partial",
+                    budget_exceeded=True,
+                    budget_reason="tool call budget reached (20/20)",
+                )
+            )
+
+            await dp.run_cron_task("daily_report", "Generate report")
+
+            MockMM.return_value.append_cron_log.assert_called_once_with(
+                "daily_report",
+                summary="[Mode C budget interrupt] tool call budget reached (20/20)\npartial",
+                duration_ms=100,
+                skill_rejections=[],
+            )
+
     async def test_run_cron_task_hard_timeout_records_failure_and_releases_lane(
         self,
         data_dir,

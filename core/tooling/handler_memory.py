@@ -62,7 +62,7 @@ def _normalize_memory_path(raw: str, anima_dir: Path) -> _PathNormResult:
     """Normalize a memory file path to a canonical relative form.
 
     Resolves absolute paths, collapses slashes, and maps shared dirs
-    (common_knowledge, reference, common_skills, shared/channels) to
+    (common_knowledge, reference, common_skills, shared procedures/channels) to
     canonical prefixes. For shared/channels, returns channel_redirect
     so the caller can delegate to read_channel/post_channel.
     """
@@ -74,6 +74,14 @@ def _normalize_memory_path(raw: str, anima_dir: Path) -> _PathNormResult:
     while raw.startswith("./"):
         raw = raw[2:]
 
+    # Historical heartbeat files refer to ../shared/procedures even though
+    # anima_dir lives one directory deeper than that spelling implies.  Keep
+    # it as a compatibility alias for the explicit read-only namespace.
+    for legacy_prefix in ("../shared/procedures/", "../../shared/procedures/", "shared/procedures/"):
+        if raw.startswith(legacy_prefix):
+            raw = f"shared_procedures/{raw[len(legacy_prefix):]}"
+            break
+
     # Fast path: no absolute path and no .. in path
     if not raw.startswith("/") and ".." not in raw:
         result = _PathNormResult(rel=raw)
@@ -83,7 +91,7 @@ def _normalize_memory_path(raw: str, anima_dir: Path) -> _PathNormResult:
 
     # Prefix-qualified paths with .. must NOT be normalized here — they must
     # go through the downstream prefix-specific traversal checks unchanged.
-    _PREFIX_DIRS = ("common_knowledge/", "reference/", "common_skills/")
+    _PREFIX_DIRS = ("common_knowledge/", "reference/", "common_skills/", "shared_procedures/")
     if any(raw.startswith(p) for p in _PREFIX_DIRS) and ".." in raw:
         return _PathNormResult(rel=raw)
 
@@ -118,7 +126,13 @@ def _normalize_memory_path(raw: str, anima_dir: Path) -> _PathNormResult:
             pass
 
     # c–f. Shared dirs (lazy import to avoid circular deps)
-    from core.paths import get_common_knowledge_dir, get_common_skills_dir, get_data_dir, get_reference_dir
+    from core.paths import (
+        get_common_knowledge_dir,
+        get_common_skills_dir,
+        get_data_dir,
+        get_reference_dir,
+        get_shared_dir,
+    )
 
     ck_dir = get_common_knowledge_dir().resolve()
     if resolved.is_relative_to(ck_dir):
@@ -147,6 +161,17 @@ def _normalize_memory_path(raw: str, anima_dir: Path) -> _PathNormResult:
         try:
             rel = str(resolved.relative_to(cs_dir))
             result = _PathNormResult(rel=f"common_skills/{rel}")
+            if result.rel != original:
+                logger.info("memory path normalized: %r → %r", original, result.rel)
+            return result
+        except ValueError:
+            pass
+
+    shared_procedures_dir = (get_shared_dir() / "procedures").resolve()
+    if resolved.is_relative_to(shared_procedures_dir):
+        try:
+            rel = str(resolved.relative_to(shared_procedures_dir))
+            result = _PathNormResult(rel=f"shared_procedures/{rel}")
             if result.rel != original:
                 logger.info("memory path normalized: %r → %r", original, result.rel)
             return result
@@ -622,7 +647,7 @@ class MemoryToolsMixin:
         is_flat_personal_skill = self._is_flat_personal_skill_path(rel)
         is_skill = is_flat_personal_skill or (rel.startswith("skills/") and "SKILL.md" in rel)
         is_common_skill = rel.startswith("common_skills/") and "SKILL.md" in rel
-        is_procedure = rel.startswith("procedures/") and rel.endswith(".md")
+        is_procedure = rel.startswith(("procedures/", "shared_procedures/")) and rel.endswith(".md")
 
         if not (is_skill or is_common_skill or is_procedure):
             return
@@ -664,7 +689,18 @@ class MemoryToolsMixin:
             rel = args["path"] = "state/current_state.md"
 
         # Support common_knowledge/ prefix — resolve to shared dir
-        if rel.startswith("common_knowledge/"):
+        if rel.startswith("shared_procedures/"):
+            from core.paths import get_shared_dir
+
+            suffix = rel[len("shared_procedures/") :]
+            procedures_dir = get_shared_dir() / "procedures"
+            path = (procedures_dir / suffix).resolve()
+            if not path.is_relative_to(procedures_dir.resolve()):
+                return _error_result(
+                    "PermissionDenied",
+                    "Path traversal detected — access denied.",
+                )
+        elif rel.startswith("common_knowledge/"):
             from core.paths import get_common_knowledge_dir
 
             suffix = rel[len("common_knowledge/") :]
@@ -804,6 +840,12 @@ class MemoryToolsMixin:
             return _error_result(
                 "PermissionDenied",
                 "reference/ is read-only. Use common_knowledge/ for shared writable documents.",
+            )
+
+        if rel.startswith("shared_procedures/"):
+            return _error_result(
+                "PermissionDenied",
+                "shared_procedures/ is read-only.",
             )
 
         # Support common_knowledge/ prefix — resolve to shared dir

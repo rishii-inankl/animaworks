@@ -14,7 +14,7 @@ Verifies:
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from core.memory.rag.retriever import MemoryRetriever, RetrievalResult
 from core.memory.rag.store import Document, SearchResult
@@ -47,6 +47,19 @@ class MockIndexer:
 
     def _generate_embeddings(self, texts):
         return [[0.1] * 384 for _ in texts]
+
+
+def test_missing_facts_collection_skips_embedding_and_query(tmp_path: Path) -> None:
+    vector_store = MockVectorStoreWithScores([0.9])
+    indexer = MockIndexer()
+    indexer._collection_exists = MagicMock(return_value=False)  # type: ignore[attr-defined]
+    retriever = MemoryRetriever(vector_store, indexer, tmp_path)
+
+    with patch.object(indexer, "_generate_embeddings", wraps=indexer._generate_embeddings) as embed:
+        results = retriever._vector_search_collection("query", "kaede_facts", 5)
+
+    assert results == []
+    embed.assert_not_called()
 
 
 # ── Config mock for spreading activation ────────────────────────────

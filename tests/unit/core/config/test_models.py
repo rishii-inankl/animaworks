@@ -98,6 +98,7 @@ class TestAnimaDefaults:
         assert pd.model == "claude-sonnet-4-6"
         assert pd.max_tokens == 8192
         assert pd.max_turns == 10000
+        assert pd.codex_max_input_tokens_per_run == 1_200_000
         assert pd.credential == "anthropic"
         assert pd.context_threshold == 0.50
         assert pd.max_chains == 2

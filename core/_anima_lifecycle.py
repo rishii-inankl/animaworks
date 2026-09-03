@@ -424,10 +424,11 @@ class LifecycleMixin:
         *,
         max_turns: int = 30,
     ) -> CycleResult:
-        """Execute 2-phase daily consolidation.
+        """Execute 2-phase daily consolidation with an executor-turn limit.
 
         Phase A: Extract structured timeline episodes from activity_log.
-        Phase B: Run knowledge extraction with the Anima's tool loop.
+        Phase B: Run knowledge extraction with the Anima's tool loop.  The
+        max_turns argument is not a completed-tool-call budget.
         """
         import time as _time
 
@@ -636,7 +637,7 @@ class LifecycleMixin:
         *,
         max_turns: int = 30,
     ) -> CycleResult:
-        """Execute weekly consolidation with the configured consolidation model."""
+        """Execute weekly consolidation with an executor-turn, not tool-call, limit."""
         import time as _time
 
         from core.config import load_config
@@ -795,9 +796,12 @@ class LifecycleMixin:
                     ]
                     result.cron_skill_rejections = rejection_dicts
                     result.cron_skill_warnings = warning_dicts
+                    cron_summary = result.summary
+                    if result.budget_exceeded:
+                        cron_summary = f"[Mode C budget interrupt] {result.budget_reason}\n{cron_summary}"
                     self.memory.append_cron_log(
                         task_name,
-                        summary=result.summary,
+                        summary=cron_summary,
                         duration_ms=result.duration_ms,
                         skill_rejections=rejection_dicts,
                     )

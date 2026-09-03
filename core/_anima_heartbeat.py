@@ -34,7 +34,10 @@ def _calc_effective_max_turns(
     activity_level: int,
     hb_max_turns: int | None = None,
 ) -> int | None:
-    """Calculate effective max_turns for heartbeat based on activity level.
+    """Calculate the executor turn/phase limit for heartbeat activity.
+
+    This is not a completed-tool-call limit.  In particular, Mode C must not
+    translate the floor value of 3 into a three-tool hard budget.
 
     When *hb_max_turns* is provided (from ``config.heartbeat.max_turns``),
     it is used as the base instead of the per-anima chat ``max_turns``.
@@ -571,6 +574,8 @@ class HeartbeatMixin:
                         context_usage_ratio=cycle_result.get("context_usage_ratio", 0.0),
                         session_chained=cycle_result.get("session_chained", False),
                         total_turns=cycle_result.get("total_turns", 0),
+                        budget_exceeded=cycle_result.get("budget_exceeded", False),
+                        budget_reason=cycle_result.get("budget_reason", ""),
                     )
                     journal.finalize(summary=result.summary[:500])
 

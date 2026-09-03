@@ -77,7 +77,8 @@ class ModelConfig(BaseModel):
     fallback_model: str | None = None
     max_tokens: int = 8192
     max_turns: int = 10000
-    codex_max_input_tokens_per_run: int = 250_000
+    codex_max_input_tokens_per_run: int = 1_200_000
+    """Cumulative Mode C input including resent context (about 1.2M for 20 tools at 50--60K each)."""
     codex_max_tool_calls_per_run: int = 20
     credential: str | None = None  # resolved credential name from config.json
     credential_type: str | None = None  # resolved credential type (api_key, codex_login, codex_azure, ...)
@@ -207,6 +208,8 @@ class CycleResult(BaseModel):
     cron_skill_rejections: list[dict[str, str]] = Field(default_factory=list)
     cron_skill_warnings: list[dict[str, str]] = Field(default_factory=list)
     usage: dict[str, int] | None = None
+    budget_exceeded: bool = False
+    budget_reason: str = ""
 
 
 class AnimaStatus(BaseModel):

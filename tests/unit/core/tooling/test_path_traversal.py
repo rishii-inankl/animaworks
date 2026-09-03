@@ -125,6 +125,36 @@ class TestCommonKnowledgeReadTraversal:
         assert result == "nested content"
 
 
+class TestSharedProcedureReadTraversal:
+    def test_allows_legacy_alias_and_canonical_path(self, tmp_path: Path):
+        handler = _make_handler(tmp_path)
+        shared_dir = tmp_path / "shared"
+        procedures_dir = shared_dir / "procedures"
+        procedures_dir.mkdir(parents=True)
+        (procedures_dir / "check.md").write_text("shared procedure", encoding="utf-8")
+
+        with patch("core.paths.get_shared_dir", return_value=shared_dir):
+            legacy_result = handler._handle_read_memory_file({"path": "../shared/procedures/check.md"})
+            canonical_result = handler._handle_read_memory_file({"path": "shared_procedures/check.md"})
+
+        assert legacy_result == "shared procedure"
+        assert canonical_result == "shared procedure"
+
+    def test_rejects_traversal_and_writes(self, tmp_path: Path):
+        handler = _make_handler(tmp_path)
+        shared_dir = tmp_path / "shared"
+        (shared_dir / "procedures").mkdir(parents=True)
+
+        with patch("core.paths.get_shared_dir", return_value=shared_dir):
+            read_result = handler._handle_read_memory_file({"path": "shared_procedures/../secret.md"})
+            write_result = handler._handle_write_memory_file(
+                {"path": "shared_procedures/check.md", "content": "bad"}
+            )
+
+        assert "PermissionDenied" in read_result
+        assert "PermissionDenied" in write_result
+
+
 # ── common_knowledge write traversal ─────────────────────
 
 

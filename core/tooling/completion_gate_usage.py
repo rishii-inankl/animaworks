@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from core.paths import get_common_skills_dir
+from core.paths import get_common_skills_dir, get_shared_dir
 from core.skills.models import SkillUsageEventType
 from core.skills.usage import SkillUsageTracker
 
@@ -93,10 +93,18 @@ def _resolve_procedure_ref(anima_dir: Path, ref: str) -> tuple[str, Path] | str:
 
     path = Path(ref)
     parts = path.parts
-    if len(parts) != 2 or parts[0] != "procedures" or path.suffix != ".md":
-        return "expected procedures/{name}.md"
+    if (
+        len(parts) != 2
+        or parts[0] not in {"procedures", "shared_procedures"}
+        or path.suffix != ".md"
+    ):
+        return "expected procedures/{name}.md or shared_procedures/{name}.md"
 
-    target = anima_dir / path
+    target = (
+        get_shared_dir() / "procedures" / path.name
+        if parts[0] == "shared_procedures"
+        else anima_dir / path
+    )
     if not target.exists():
         return "procedure file not found"
     return path.stem, target

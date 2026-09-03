@@ -15,6 +15,7 @@ CK_DIR = DATA_DIR / "common_knowledge"
 REF_DIR = DATA_DIR / "reference"
 CS_DIR = DATA_DIR / "common_skills"
 CHANNELS_DIR = DATA_DIR / "shared" / "channels"
+SHARED_DIR = DATA_DIR / "shared"
 
 
 @pytest.fixture(autouse=True)
@@ -25,6 +26,7 @@ def _mock_paths():
         patch("core.paths.get_common_knowledge_dir", return_value=CK_DIR),
         patch("core.paths.get_reference_dir", return_value=REF_DIR),
         patch("core.paths.get_common_skills_dir", return_value=CS_DIR),
+        patch("core.paths.get_shared_dir", return_value=SHARED_DIR),
     ):
         yield
 
@@ -43,6 +45,19 @@ class TestFastPath:
     def test_state_file(self):
         result = _normalize_memory_path("state/current_state.md", ANIMA_DIR)
         assert result == _PathNormResult(rel="state/current_state.md")
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "shared_procedures/approval-preflight.md",
+            "shared/procedures/approval-preflight.md",
+            "../shared/procedures/approval-preflight.md",
+            "../../shared/procedures/approval-preflight.md",
+        ],
+    )
+    def test_shared_procedure_aliases(self, path):
+        result = _normalize_memory_path(path, ANIMA_DIR)
+        assert result == _PathNormResult(rel="shared_procedures/approval-preflight.md")
 
 
 class TestSlashCleanup:
