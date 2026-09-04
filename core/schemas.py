@@ -119,6 +119,9 @@ class AnimaConfig(BaseModel):
 EXTERNAL_PLATFORM_SOURCES: frozenset[str] = frozenset({"slack", "chatwork", "googlechat", "discord"})
 """Message ``source`` values representing external platforms (Slack, Chatwork, Discord, etc.)."""
 
+HUMAN_MESSAGE_SOURCES: frozenset[str] = frozenset({"human", "cli"})
+"""Message ``source`` values that represent a direct instruction from a human."""
+
 
 class Message(BaseModel):
     id: str = Field(default_factory=lambda: now_local().strftime("%Y%m%d_%H%M%S_%f"))
@@ -133,7 +136,7 @@ class Message(BaseModel):
     timestamp: datetime = Field(default_factory=now_local)
 
     # External messaging integration
-    source: str = "anima"  # "anima" | "human" | "slack" | "chatwork" | "googlechat"
+    source: str = "anima"  # "anima" | "human" | "cli" | external platform
     source_message_id: str = ""  # message ID on external platform
     external_user_id: str = ""  # user ID on external platform
     external_channel_id: str = ""  # channel/room ID on external platform

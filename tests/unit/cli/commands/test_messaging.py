@@ -17,12 +17,13 @@ import pytest
 
 class TestCmdSend:
     @patch("cli.commands.messaging._notify_server_message_sent")
+    @patch("core.config.models.load_config")
     @patch("core.messenger.Messenger")
     @patch("core.paths.get_shared_dir", return_value=Path("/tmp/shared"))
     @patch("core.init.ensure_runtime_dir")
     def test_send_success(
         self, mock_ensure, mock_shared, mock_messenger_cls,
-        mock_notify, capsys,
+        mock_load_config, mock_notify, capsys,
     ):
         from cli.commands.messaging import cmd_send
 
@@ -35,6 +36,7 @@ class TestCmdSend:
         mock_messenger = MagicMock()
         mock_messenger.send.return_value = mock_msg
         mock_messenger_cls.return_value = mock_messenger
+        mock_load_config.return_value.animas = {"alice": MagicMock()}
 
         args = argparse.Namespace(
             from_person="alice",
@@ -49,6 +51,33 @@ class TestCmdSend:
         assert "alice" in captured.out
         assert "bob" in captured.out
         mock_notify.assert_called_once_with("alice", "bob", "Hello Bob", "msg001")
+        assert mock_messenger.send.call_args.kwargs["source"] == "anima"
+        assert mock_messenger.send.call_args.kwargs["origin_chain"] == []
+
+    @patch("cli.commands.messaging._notify_server_message_sent")
+    @patch("core.config.models.load_config")
+    @patch("core.messenger.Messenger")
+    @patch("core.paths.get_shared_dir", return_value=Path("/tmp/shared"))
+    @patch("core.init.ensure_runtime_dir")
+    def test_human_sender_uses_cli_provenance(
+        self, mock_ensure, mock_shared, mock_messenger_cls,
+        mock_load_config, mock_notify,
+    ):
+        from cli.commands.messaging import cmd_send
+
+        mock_load_config.return_value.animas = {"alice": MagicMock(), "bob": MagicMock()}
+        mock_msg = MagicMock(from_person="reoishii", to_person="bob", id="msg002", thread_id="msg002")
+        mock_messenger_cls.return_value.send.return_value = mock_msg
+        args = argparse.Namespace(
+            from_person="reoishii", to_person="bob", message="Please start",
+            thread_id=None, reply_to=None, intent="delegation",
+        )
+
+        cmd_send(args)
+
+        kwargs = mock_messenger_cls.return_value.send.call_args.kwargs
+        assert kwargs["source"] == "cli"
+        assert kwargs["origin_chain"] == ["human"]
 
 
 # ── _notify_server_message_sent ──────────────────────────

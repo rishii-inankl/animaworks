@@ -164,3 +164,22 @@ def test_anima_budget_warning_is_mirrored_to_main_log(tmp_path):
                 budget_logger.removeHandler(handler)
                 handler.close()
         logging.getLogger().handlers.clear()
+
+
+def test_anima_inbox_rejection_is_mirrored_to_main_log(tmp_path):
+    """Rejected inbox provenance is visible in the supervisor log."""
+    rejection_logger = logging.getLogger("animaworks.messenger")
+    original_handlers = list(rejection_logger.handlers)
+    try:
+        setup_anima_logging("sena", tmp_path, also_to_console=False)
+        rejection_logger.warning("Ignoring inbox message with unknown source='invalid'")
+
+        content = (tmp_path / "animaworks.log").read_text(encoding="utf-8")
+        assert "[sena]" in content
+        assert "unknown source='invalid'" in content
+    finally:
+        for handler in list(rejection_logger.handlers):
+            if handler not in original_handlers:
+                rejection_logger.removeHandler(handler)
+                handler.close()
+        logging.getLogger().handlers.clear()

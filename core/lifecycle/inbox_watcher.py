@@ -10,7 +10,7 @@ import asyncio
 import logging
 import time
 
-from core.schemas import EXTERNAL_PLATFORM_SOURCES
+from core.schemas import EXTERNAL_PLATFORM_SOURCES, HUMAN_MESSAGE_SOURCES
 
 logger = logging.getLogger("animaworks.lifecycle")
 
@@ -19,7 +19,7 @@ def _is_immediately_actionable_intent(intent: str, source: str, actionable_inten
     """Return True when an inbox message should trigger immediate processing."""
     if intent in actionable_intents:
         return True
-    return intent == "delegation" and source not in {"human", *EXTERNAL_PLATFORM_SOURCES}
+    return intent == "delegation" and source not in {*HUMAN_MESSAGE_SOURCES, *EXTERNAL_PLATFORM_SOURCES}
 
 
 class InboxWatcherMixin:
@@ -126,7 +126,7 @@ class InboxWatcherMixin:
         # ── Intent-based trigger filtering ──
         # Only trigger immediate heartbeat for actionable messages or human messages.
         # Non-actionable messages (ack, thanks, FYI) wait for the scheduled heartbeat.
-        has_human = any(m.source == "human" for m in inbox_messages)
+        has_human = any(m.source in HUMAN_MESSAGE_SOURCES for m in inbox_messages)
         has_external_directed = any(m.source in EXTERNAL_PLATFORM_SOURCES and m.intent for m in inbox_messages)
         has_actionable = any(
             _is_immediately_actionable_intent(

@@ -71,7 +71,10 @@ class PermissionsMixin:
         config = self._load_permissions_config()
 
         file_read: list[str] = [t("handler.file_read_own"), t("handler.file_read_shared")]
-        file_write: list[str] = [t("handler.file_write_own")]
+        from core.paths import get_shared_dir
+
+        own_inbox = get_shared_dir() / "inbox" / self._anima_name
+        file_write: list[str] = [t("handler.file_write_own"), str(own_inbox)]
         if self._subordinate_management_files:
             file_read.append(t("handler.subordinate_management"))
             file_write.append(t("handler.subordinate_management"))
@@ -168,6 +171,23 @@ class PermissionsMixin:
                     logger.warning("permission_denied anima=%s path=%s reason=protected_file", self._anima_name, path)
                     return err
             return None
+
+        # An Anima may maintain only its own inbox.  This narrow exception is
+        # needed for root -> processed/expired/quarantine archive moves while
+        # preserving the read-only boundary for every other shared path.
+        if write:
+            from core.paths import get_shared_dir
+
+            framework_shared = get_shared_dir().resolve()
+            own_inbox = (framework_shared / "inbox" / self._anima_name).resolve()
+            if resolved.is_relative_to(own_inbox):
+                return None
+            if resolved.is_relative_to(framework_shared):
+                logger.warning("permission_denied anima=%s path=%s reason=shared_write_boundary", self._anima_name, path)
+                return _error_result(
+                    "PermissionDenied",
+                    f"Write access to shared framework paths is not allowed: {path}",
+                )
 
         # Supervisor can read direct subordinate's activity_log (work records)
         if not write:

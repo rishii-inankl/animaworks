@@ -21,10 +21,12 @@ from core.exceptions import (
     RecipientNotFoundError,
 )  # noqa: F401
 from core.i18n import t
-from core.schemas import EXTERNAL_PLATFORM_SOURCES, Message
+from core.schemas import EXTERNAL_PLATFORM_SOURCES, HUMAN_MESSAGE_SOURCES, Message
 from core.time_utils import ensure_aware, now_iso, now_local
 
 logger = logging.getLogger("animaworks.messenger")
+
+_ALLOWED_INBOX_SOURCES = frozenset({"anima", *HUMAN_MESSAGE_SOURCES, *EXTERNAL_PLATFORM_SOURCES})
 
 _SAFE_ASCII_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,30}$")
 
@@ -187,6 +189,7 @@ class Messenger:
         intent: str = "",
         origin_chain: list[str] | None = None,
         meta: dict[str, Any] | None = None,
+        source: str = "anima",
     ) -> Message:
         # ── Conversation depth check (internal Anima only) ──
         if msg_type not in ("ack", "error", "system_alert"):
@@ -232,6 +235,7 @@ class Messenger:
             intent=intent,
             origin_chain=origin_chain or [],
             meta=meta or {},
+            source=source,
         )
         # New thread: use message id as thread_id
         if not msg.thread_id:
@@ -579,12 +583,7 @@ class Messenger:
             try:
                 data = json.loads(f.read_text(encoding="utf-8"))
                 msg = Message(**data)
-                if known_animas is not None and msg.source == "anima" and msg.from_person not in known_animas:
-                    logger.warning(
-                        "Ignoring inbox message with unknown from_person=%r in %s",
-                        msg.from_person,
-                        f,
-                    )
+                if self._rejection_reason(msg, known_animas, f):
                     continue
                 messages.append(msg)
             except Exception as e:
@@ -614,18 +613,31 @@ class Messenger:
             try:
                 data = json.loads(f.read_text(encoding="utf-8"))
                 msg = Message(**data)
-                if known_animas is not None and msg.source == "anima" and msg.from_person not in known_animas:
-                    logger.warning(
-                        "Ignoring inbox message with unknown from_person=%r in %s",
-                        msg.from_person,
-                        f,
-                    )
+                if self._rejection_reason(msg, known_animas, f):
                     continue
                 items.append(InboxItem(msg=msg, path=f))
             except Exception:
                 logger.warning("Failed to read inbox file: %s", f, exc_info=True)
                 self._quarantine_file(f)
         return items
+
+    @staticmethod
+    def _rejection_reason(msg: Message, known_animas: set[str] | None, path: Path) -> str | None:
+        """Log and reject untrusted inbox provenance.
+
+        The messenger warning logger is mirrored to the supervisor's main log
+        by ``setup_anima_logging`` so these security failures are visible
+        without inspecting every per-anima log.
+        """
+        reason: str | None = None
+        if msg.source not in _ALLOWED_INBOX_SOURCES:
+            reason = f"unknown source={msg.source!r}"
+        elif known_animas is not None and msg.source == "anima" and msg.from_person not in known_animas:
+            reason = f"unknown from_person={msg.from_person!r}"
+        if reason is not None:
+            message = f"Ignoring inbox message with {reason} in {path}"
+            logger.warning(message)
+        return reason
 
     def _quarantine_file(self, f: Path) -> bool:
         """Move an unparseable inbox file to ``quarantine/``.
@@ -636,7 +648,7 @@ class Messenger:
         quarantine_dir = self.inbox_dir / "quarantine"
         quarantine_dir.mkdir(exist_ok=True)
         try:
-            f.rename(quarantine_dir / f.name)
+            self._move_file_to_dir(f, quarantine_dir)
             logger.warning("Quarantined invalid inbox file: %s", f.name)
             return True
         except OSError:
@@ -810,7 +822,7 @@ class Messenger:
         count = 0
         for item in items:
             if item.path.exists():
-                item.path.rename(processed_dir / item.path.name)
+                self._move_file_to_dir(item.path, processed_dir)
                 count += 1
         return count
 

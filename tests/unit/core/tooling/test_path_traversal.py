@@ -50,6 +50,7 @@ def _make_handler(tmp_path: Path, anima_name: str = "test_anima"):
     handler._descendant_activity_dirs = []
     handler._descendant_state_files = []
     handler._descendant_state_dirs = []
+    handler._peer_activity_dirs = []
     handler._state_file_lock = None
     handler._session_id = uuid.uuid4().hex[:12]
     handler._process_supervisor = None
@@ -64,6 +65,39 @@ def _make_handler(tmp_path: Path, anima_name: str = "test_anima"):
     handler._external = MagicMock(spec=ExternalToolDispatcher)
 
     return handler
+
+
+class TestOwnInboxWriteBoundary:
+    def test_allows_write_under_own_inbox(self, tmp_path: Path):
+        handler = _make_handler(tmp_path, anima_name="sena")
+        shared_dir = tmp_path / "shared"
+        own_processed = shared_dir / "inbox" / "sena" / "processed" / "message.json"
+
+        with patch("core.paths.get_shared_dir", return_value=shared_dir):
+            result = handler._check_file_permission(str(own_processed), write=True)
+
+        assert result is None
+
+    def test_rejects_write_under_other_inbox(self, tmp_path: Path):
+        handler = _make_handler(tmp_path, anima_name="sena")
+        shared_dir = tmp_path / "shared"
+        other_processed = shared_dir / "inbox" / "kaede" / "processed" / "message.json"
+
+        with patch("core.paths.get_shared_dir", return_value=shared_dir):
+            result = handler._check_file_permission(str(other_processed), write=True)
+
+        assert result is not None
+        assert "PermissionDenied" in result
+
+    def test_rejects_write_to_other_shared_area(self, tmp_path: Path):
+        handler = _make_handler(tmp_path, anima_name="sena")
+        shared_dir = tmp_path / "shared"
+
+        with patch("core.paths.get_shared_dir", return_value=shared_dir):
+            result = handler._check_file_permission(str(shared_dir / "channels" / "general.jsonl"), write=True)
+
+        assert result is not None
+        assert "PermissionDenied" in result
 
 
 # ── common_knowledge read traversal ──────────────────────

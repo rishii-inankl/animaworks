@@ -16,11 +16,13 @@ logger = logging.getLogger("animaworks")
 
 def cmd_send(args: argparse.Namespace) -> None:
     """Send a message from one anima to another (filesystem based)."""
+    from core.config.models import load_config
     from core.init import ensure_runtime_dir
     from core.messenger import Messenger
     from core.paths import get_shared_dir
 
     ensure_runtime_dir()
+    is_anima_sender = args.from_person in load_config().animas
     messenger = Messenger(get_shared_dir(), args.from_person)
     msg = messenger.send(
         to=args.to_person,
@@ -28,6 +30,8 @@ def cmd_send(args: argparse.Namespace) -> None:
         thread_id=args.thread_id or "",
         reply_to=args.reply_to or "",
         intent=getattr(args, "intent", "") or "",
+        source="anima" if is_anima_sender else "cli",
+        origin_chain=[] if is_anima_sender else ["human"],
     )
     print(f"Sent: {msg.from_person} -> {msg.to_person} (id: {msg.id}, thread: {msg.thread_id})")
     _persist_replied_to_for_a1(args.to_person)

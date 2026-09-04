@@ -88,6 +88,15 @@ class TestSend:
         files = list(bob_inbox.glob("*.json"))
         assert len(files) == 1
 
+    def test_send_preserves_explicit_cli_provenance(self, shared_dir, messenger):
+        msg = messenger.send("bob", "Human instruction", source="cli", origin_chain=["human"])
+
+        assert msg.source == "cli"
+        assert msg.origin_chain == ["human"]
+        stored = Message.model_validate_json(next((shared_dir / "inbox" / "bob").glob("*.json")).read_text())
+        assert stored.source == "cli"
+        assert stored.origin_chain == ["human"]
+
     def test_send_creates_target_dir(self, shared_dir, messenger):
         messenger.send("charlie", "Hi Charlie")
         assert (shared_dir / "inbox" / "charlie").is_dir()
@@ -682,6 +691,17 @@ class TestArchivePaths:
 
         processed = shared_dir / "inbox" / "alice" / "processed"
         assert processed.is_dir()
+
+    def test_archive_uses_suffix_when_processed_name_exists(self, shared_dir, messenger):
+        bob = Messenger(shared_dir, "bob")
+        bob.send("alice", "new copy")
+        item = messenger.receive_with_paths()[0]
+        processed = shared_dir / "inbox" / "alice" / "processed"
+        processed.mkdir(exist_ok=True)
+        (processed / item.path.name).write_text("old copy", encoding="utf-8")
+
+        assert messenger.archive_paths([item]) == 1
+        assert (processed / f"{item.path.stem}_2{item.path.suffix}").exists()
 
 
 # ── Delivery verification ────────────────────────────────

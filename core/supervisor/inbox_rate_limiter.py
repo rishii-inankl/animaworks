@@ -15,7 +15,7 @@ import time
 from typing import TYPE_CHECKING
 
 from core.config.models import load_config
-from core.schemas import EXTERNAL_PLATFORM_SOURCES
+from core.schemas import EXTERNAL_PLATFORM_SOURCES, HUMAN_MESSAGE_SOURCES
 
 if TYPE_CHECKING:
     from core.anima import DigitalAnima
@@ -33,7 +33,7 @@ def _is_immediately_actionable_intent(intent: str, source: str, actionable_inten
     """
     if intent in actionable_intents:
         return True
-    return intent == "delegation" and source not in {"human", *EXTERNAL_PLATFORM_SOURCES}
+    return intent == "delegation" and source not in {*HUMAN_MESSAGE_SOURCES, *EXTERNAL_PLATFORM_SOURCES}
 
 
 class InboxRateLimiter:
@@ -79,7 +79,10 @@ class InboxRateLimiter:
             from core.schemas import EXTERNAL_PLATFORM_SOURCES
 
             messages = self._anima.messenger.receive()
-            return any(m.source in EXTERNAL_PLATFORM_SOURCES and m.intent for m in messages)
+            return any(
+                m.source in HUMAN_MESSAGE_SOURCES or (m.source in EXTERNAL_PLATFORM_SOURCES and m.intent)
+                for m in messages
+            )
         except Exception:
             return False
 
@@ -206,7 +209,7 @@ class InboxRateLimiter:
         # Only trigger immediate heartbeat for actionable messages or human messages.
         # Non-actionable messages (ack, thanks, FYI) wait for the scheduled heartbeat.
         cfg = load_config()
-        has_human = any(m.source == "human" for m in inbox_messages)
+        has_human = any(m.source in HUMAN_MESSAGE_SOURCES for m in inbox_messages)
         has_external_directed = any(m.source in EXTERNAL_PLATFORM_SOURCES and m.intent for m in inbox_messages)
         has_actionable = any(
             _is_immediately_actionable_intent(
@@ -226,7 +229,11 @@ class InboxRateLimiter:
 
         # Cascade detection applies only to Anima-to-Anima communication,
         # NOT to messages from external platforms (Slack DMs from humans).
-        cascade_senders = {m.from_person for m in inbox_messages if m.source not in EXTERNAL_PLATFORM_SOURCES}
+        cascade_senders = {
+            m.from_person
+            for m in inbox_messages
+            if m.source not in {*HUMAN_MESSAGE_SOURCES, *EXTERNAL_PLATFORM_SOURCES}
+        }
         if cascade_senders and self.check_cascade(cascade_senders):
             self._pending_trigger = False
             return

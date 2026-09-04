@@ -130,6 +130,44 @@ class TestReceiveWithPathsFromPersonValidation:
         assert len(items) == 0
 
     @patch("core.config.models.load_config")
+    def test_cli_human_sender_accepted(self, mock_load: MagicMock, shared_dir: Path):
+        mock_load.return_value = _mock_config_with_animas("alice", "bob")
+        alice = Messenger(shared_dir, "alice")
+        inbox = shared_dir / "inbox" / "alice"
+        msg = Message(
+            from_person="reoishii",
+            to_person="alice",
+            content="Please start",
+            source="cli",
+            origin_chain=["human"],
+        )
+        (inbox / "msg.json").write_text(msg.model_dump_json(), encoding="utf-8")
+
+        items = alice.receive_with_paths()
+
+        assert len(items) == 1
+        assert items[0].msg.source == "cli"
+        assert items[0].msg.origin_chain == ["human"]
+
+    @patch("core.config.models.load_config")
+    def test_unknown_source_is_ignored_and_operationally_logged(
+        self, mock_load: MagicMock, shared_dir: Path, caplog: pytest.LogCaptureFixture,
+    ):
+        import logging
+
+        mock_load.return_value = _mock_config_with_animas("alice")
+        alice = Messenger(shared_dir, "alice")
+        inbox = shared_dir / "inbox" / "alice"
+        msg = Message(from_person="someone", to_person="alice", content="Bad", source="carrier-pigeon")
+        (inbox / "msg.json").write_text(msg.model_dump_json(), encoding="utf-8")
+
+        with caplog.at_level(logging.WARNING):
+            items = alice.receive_with_paths()
+
+        assert items == []
+        assert any(r.name == "animaworks.messenger" and "unknown source" in r.message for r in caplog.records)
+
+    @patch("core.config.models.load_config")
     def test_unknown_sender_warning_logged(
         self, mock_load: MagicMock, shared_dir: Path, caplog: pytest.LogCaptureFixture,
     ):

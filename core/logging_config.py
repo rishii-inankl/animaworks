@@ -264,24 +264,26 @@ def setup_anima_logging(
     file_handler.suffix = "%Y%m%d.log"  # Match filename format
     root.addHandler(file_handler)
 
-    # Budget interrupts happen inside runner subprocesses, whose root logger
-    # normally writes only to the per-anima log.  Mirror this one high-value
-    # warning stream into the supervisor log so operational health checks can
-    # see a truncated cron/heartbeat without scraping every worker log.
-    budget_log = logging.getLogger("animaworks.budget")
-    for existing in list(budget_log.handlers):
-        if getattr(existing, "_animaworks_global_budget_handler", False):
-            budget_log.removeHandler(existing)
-            existing.close()
-    global_budget_handler = _SharedMainLogHandler(log_dir / "animaworks.log")
-    global_budget_handler.setFormatter(
-        logging.Formatter(
-            fmt=f"%(asctime)s [%(levelname)s] %(name)s [{anima_name}]: %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
+    # Worker root loggers normally write only to the per-anima log. Mirror
+    # high-value operational warnings into the supervisor log so health checks
+    # do not have to scrape every worker log.
+    for logger_name in ("animaworks.budget", "animaworks.messenger"):
+        operational_log = logging.getLogger(logger_name)
+        for existing in list(operational_log.handlers):
+            if getattr(existing, "_animaworks_global_warning_handler", False) or getattr(
+                existing, "_animaworks_global_budget_handler", False
+            ):
+                operational_log.removeHandler(existing)
+                existing.close()
+        global_warning_handler = _SharedMainLogHandler(log_dir / "animaworks.log")
+        global_warning_handler.setFormatter(
+            logging.Formatter(
+                fmt=f"%(asctime)s [%(levelname)s] %(name)s [{anima_name}]: %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+            )
         )
-    )
-    setattr(global_budget_handler, "_animaworks_global_budget_handler", True)
-    budget_log.addHandler(global_budget_handler)
+        setattr(global_warning_handler, "_animaworks_global_warning_handler", True)
+        operational_log.addHandler(global_warning_handler)
 
     # Create/update current.log symlink
     current_link = anima_log_dir / "current.log"

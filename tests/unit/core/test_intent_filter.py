@@ -172,6 +172,15 @@ class TestLifecycleIntentFilter:
         lm.animas["alice"].process_inbox_message.assert_called_once()
         assert "alice" not in lm._pending_triggers
 
+    async def test_lifecycle_cli_source_always_triggers(self):
+        messages = [_make_message(intent="", source="cli", from_person="reoishii")]
+        lm = _setup_lifecycle(messages)
+
+        with patch("core.lifecycle.load_config", return_value=_default_config()):
+            await lm._message_triggered_heartbeat("alice")
+
+        lm.animas["alice"].process_inbox_message.assert_called_once()
+
     async def test_lifecycle_slack_directed_triggers(self):
         """Message with source='slack' and intent='question' should trigger.
 
@@ -307,6 +316,23 @@ class TestLimiterIntentFilter:
 
         limiter._anima.process_inbox_message.assert_called_once()
         assert limiter._pending_trigger is False
+
+    async def test_limiter_cli_source_always_triggers(self):
+        messages = [_make_message(intent="", source="cli", from_person="reoishii")]
+        limiter = _make_limiter(messages)
+
+        with patch(
+            "core.supervisor.inbox_rate_limiter.load_config",
+            return_value=_default_config(),
+        ):
+            await limiter.message_triggered_inbox()
+
+        limiter._anima.process_inbox_message.assert_called_once()
+
+    def test_cli_source_bypasses_cooldown_probe(self):
+        limiter = _make_limiter([_make_message(intent="", source="cli", from_person="reoishii")])
+
+        assert limiter._has_external_platform_message() is True
 
     async def test_limiter_slack_directed_triggers(self):
         """Message with source='slack' and intent='question' should trigger.
