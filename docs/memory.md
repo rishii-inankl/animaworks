@@ -328,9 +328,15 @@ Cached at `{anima_dir}/vectordb/knowledge_graph.json`; incrementally updated whe
 | `skill_match_min_score` | `0.75` | Vector-stage threshold for skill matching |
 | `enabled` | `true` | Master RAG enable flag |
 | `embedding_model` | `intfloat/multilingual-e5-small` | Embedding model id |
-| `use_gpu` | `false` | Use GPU for embedding inference |
+| `use_gpu` | `false` | Allow GPU use for embedding and cross-encoder inference |
 | `enable_file_watcher` | `true` | Watch memory files (incremental index) |
 | `graph_cache_enabled` | `true` | Cache knowledge graph JSON |
+
+With `rag.use_gpu=false`, the cross-encoder reranker explicitly uses CPU. With
+`true`, sentence-transformers selects the device automatically (including MPS
+on supported Macs). The setting is read when the model is first loaded; restart
+each process holding an already loaded reranker to change its device. Embedding
+inference keeps its existing CUDA-or-CPU selection.
 
 ---
 

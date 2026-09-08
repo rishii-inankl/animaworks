@@ -13,7 +13,11 @@ _DEFAULT_MODEL = "cross-encoder/ms-marco-MiniLM-L-12-v2"
 
 
 class CrossEncoderReranker:
-    """Reranker using sentence-transformers cross-encoder."""
+    """Reranker using sentence-transformers cross-encoder.
+
+    ``rag.use_gpu`` is applied when the lazy model is first loaded. Restart
+    the owning worker to change the device of an already loaded model.
+    """
 
     def __init__(self, model_name: str = _DEFAULT_MODEL) -> None:
         self._model_name = model_name
@@ -26,10 +30,15 @@ class CrossEncoderReranker:
         if self._model is not None:
             return True
         try:
+            from core.config import load_config
+
+            # An unspecified device lets sentence-transformers choose MPS/CUDA.
+            # Preserve that behavior only when GPU use is explicitly enabled.
+            device = None if load_config().rag.use_gpu else "cpu"
             from sentence_transformers import CrossEncoder
 
-            self._model = CrossEncoder(self._model_name)
-            logger.info("Cross-encoder loaded: %s", self._model_name)
+            self._model = CrossEncoder(self._model_name, device=device)
+            logger.info("Cross-encoder loaded: %s on %s", self._model_name, self._model.device)
             return True
         except Exception:
             logger.warning("Cross-encoder unavailable: %s", self._model_name, exc_info=True)

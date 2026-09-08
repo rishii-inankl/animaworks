@@ -334,7 +334,7 @@ score × 0.5 で最終結果に追加（activation: "spreading" タグ付き）
 | `skill_match_min_score` | `0.75` | スキルマッチのベクトル段階での閾値 |
 | `enabled` | `true` | RAG 全体の有効フラグ |
 | `embedding_model` | `intfloat/multilingual-e5-small` | 埋め込みモデル ID |
-| `use_gpu` | `false` | 埋め込み推論の GPU 利用 |
+| `use_gpu` | `false` | 埋め込み・cross-encoder 推論の GPU 利用を許可 |
 | `enable_file_watcher` | `true` | 記憶ファイル監視（増分インデックス） |
 | `graph_cache_enabled` | `true` | ナレッジグラフ JSON キャッシュ |
 | `vector_worker_enabled` | `true` | ChromaDB / sentence-transformers を隔離ワーカーで実行する |
@@ -343,6 +343,11 @@ score × 0.5 で最終結果に追加（activation: "spreading" タグ付き）
 | `repair_error_threshold` | `2` | 指定ウィンドウ内で修復候補にするエラー回数 |
 | `repair_cooldown_minutes` | `60` | 同一対象の連続修復を抑制する時間 |
 | `startup_repair_preflight_enabled` | `true` | 起動時に直近のRAG不整合を確認する |
+
+`rag.use_gpu=false` の場合、cross-encoder による並べ替えは CPU を明示して実行する。
+`true` の場合は sentence-transformers がデバイスを自動選択する（対応する Mac では MPS も対象）。
+設定はモデルの初回ロード時に読み込むため、ロード済みモデルのデバイスを変えるには、
+そのモデルを保持している各プロセスの再起動が必要。埋め込み推論の CUDA / CPU 選択は従来どおり。
 
 ChromaDBのネイティブアクセスは、通常プロセスからは無効化されている。サーバー、CLIの `index`、`repair-rag` は vector worker または一時 vector worker を経由し、クラッシュやロック破損を記録した場合は repair service が隔離・再構築の候補として扱う。`animaworks repair-rag --anima NAME --full` は破損した `vectordb` を quarantine し、対象Animaの記憶からフル再インデックスする。
 
