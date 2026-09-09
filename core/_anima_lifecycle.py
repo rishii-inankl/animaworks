@@ -138,16 +138,19 @@ def _consolidation_model_config(base_model_config: Any, consolidation_model: str
 class LifecycleMixin:
     """Mixin: heartbeat orchestration, memory consolidation, cron task execution."""
 
-    async def _keepalive_while_busy(self, interval: float = 60.0) -> None:
+    async def _keepalive_while_busy(self, interval: float = 60.0, *, update_progress: bool = True) -> None:
         """Periodically update _last_progress_at to prevent busy-hang false positives.
 
         Start this as a background task during long-running operations (heartbeat,
         cron, etc.) that may not update progress through the normal streaming path.
+        Consolidation passes ``update_progress=False`` to publish liveness without
+        masking a stalled operation's last actual progress timestamp.
         """
         try:
             while True:
                 await asyncio.sleep(interval)
-                self._last_progress_at = now_local()
+                if update_progress:
+                    self._last_progress_at = now_local()
                 self._write_busy_status_sidecar()
         except asyncio.CancelledError:
             pass
@@ -313,6 +316,39 @@ class LifecycleMixin:
         consolidation_type: str = "daily",
         max_turns: int = 30,
     ) -> CycleResult:
+        """Bound the complete consolidation request, including waiting for its lane.
+
+        Cancellation runs the lane/marker cleanup below. The supervisor has a
+        separate IPC deadline to recover a worker whose cancellation is stuck.
+        """
+        from core.config import load_config
+
+        limit = load_config().consolidation.hard_timeout_seconds
+        deadline = asyncio.timeout(limit)
+        try:
+            async with deadline:
+                return await self._run_consolidation_cycle(consolidation_type, max_turns)
+        except TimeoutError:
+            if deadline.expired():
+                logger.warning(
+                    "consolidation_deadline anima=%s type=%s timeout_s=%s",
+                    self.name,
+                    consolidation_type,
+                    limit,
+                )
+                self._activity.log(
+                    "error",
+                    summary=t("anima.consolidation_error", exc="TimeoutError"),
+                    meta={"phase": "run_consolidation", "type": consolidation_type, "timeout_seconds": limit},
+                    safe=True,
+                )
+            raise
+
+    async def _run_consolidation_cycle(
+        self,
+        consolidation_type: str = "daily",
+        max_turns: int = 30,
+    ) -> CycleResult:
         """Run memory consolidation as a 2-phase Anima-driven task.
 
         Daily consolidation uses a 2-phase approach:
@@ -344,7 +380,8 @@ class LifecycleMixin:
         try:
             async with self._background_lock:
                 self._mark_busy_start()
-                _keepalive = asyncio.create_task(self._keepalive_while_busy())
+                # Liveness writes must not look like actual consolidation progress.
+                _keepalive = asyncio.create_task(self._keepalive_while_busy(update_progress=False))
                 self._status_slots["background"] = "consolidating"
                 self._task_slots["background"] = f"Memory consolidation ({consolidation_type})"
                 agent = _agent_for_lane(self, "background")
@@ -353,10 +390,6 @@ class LifecycleMixin:
                 _consolidation_flag = self.anima_dir / "state" / ".consolidation_mode"
                 try:
                     _consolidation_flag.write_text("1", encoding="utf-8")
-                except OSError:
-                    pass
-
-                try:
                     from core.memory.consolidation import ConsolidationEngine
 
                     engine = ConsolidationEngine(self.anima_dir, self.name)
@@ -377,7 +410,14 @@ class LifecycleMixin:
                             max_turns=max_turns,
                         )
 
+                    # An executor may return a partial result after catching
+                    # CancelledError. Preserve the enclosing deadline/caller's
+                    # cancellation instead of recording successful consolidation.
+                    task = asyncio.current_task()
+                    if task is not None and task.cancelling():
+                        raise asyncio.CancelledError
                     self._last_activity = now_local()
+                    self._last_progress_at = self._last_activity
                     self._activity.log(
                         "consolidation_end",
                         summary=t("anima.consolidation_end", type=consolidation_type),
@@ -411,10 +451,15 @@ class LifecycleMixin:
                     raise
                 finally:
                     _keepalive.cancel()
-                    _consolidation_flag.unlink(missing_ok=True)
-                    active_session_type.reset(_session_token)
-                    self._status_slots["background"] = "idle"
-                    self._task_slots["background"] = ""
+                    try:
+                        _consolidation_flag.unlink(missing_ok=True)
+                    except OSError:
+                        logger.exception("[%s] Failed to clear consolidation marker", self.name)
+                        raise
+                    finally:
+                        active_session_type.reset(_session_token)
+                        self._status_slots["background"] = "idle"
+                        self._task_slots["background"] = ""
         finally:
             self._notify_lock_released()
 
@@ -481,6 +526,7 @@ class LifecycleMixin:
                     credential=consolidation_credential,
                     max_tokens=8192,
                 )
+                self._last_progress_at = now_local()
                 if raw:
                     episode_parts.append(engine._sanitize_llm_output(raw))
                     logger.debug(

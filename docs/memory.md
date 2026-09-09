@@ -474,6 +474,34 @@ Waking (conversation)                     Sleeping (no conversation)
 
 **2. Post-processing**: `ForgettingEngine.neurogenesis_reorganize()` (async), RAG rebuild
 
+### Consolidation deadline and recovery
+
+`config.json` → `consolidation.hard_timeout_seconds` bounds each daily or weekly
+Anima request, including time waiting for the background lane. The default is
+1800 seconds (30 minutes); accepted values are 60–86400 seconds. This is separate
+from `max_turns`. Restart the server after changing the deadline so both the
+supervisor and workers use the same configuration.
+
+At the deadline, the worker cancels the request and releases its lane, status,
+session context, and `.consolidation_mode` marker. It reports `status: timeout`
+without a successful `consolidation_end` event. Already saved memory remains;
+unfinished Phase B carryover is retained for a later run.
+
+The supervisor allows another 30 seconds for cancellation to finish. If no IPC
+response arrives, it checks whether consolidation is still running, interrupts
+only the background lane, and allows up to 30 seconds for confirmed exit. If
+exit cannot be confirmed, it restarts that worker and verifies a new running
+PID. A worker that has already finished or been replaced is not interrupted.
+Post-processing is skipped when recovery cannot be confirmed. Replacement
+workers remove a stale consolidation marker only after acquiring their process
+lock.
+
+Consolidation keepalive updates indicate liveness only. Actual Phase A responses
+and completed consolidation update the progress timestamp. The deadline does not
+bound framework post-processing or guarantee immediate cancellation of blocking
+code; the separate supervisor recovery handles an unresponsive worker. See
+[Python's cancellation and timeout semantics](https://docs.python.org/3.12/library/asyncio-task.html#timeouts).
+
 ### Monthly forgetting pipeline
 
 > Schedule: monthly forgetting in `system_consolidation.py` (`ConsolidationConfig.monthly_time`, default day 1 04:00 JST)

@@ -174,6 +174,14 @@ class AnimaRunner:
         try:
             self._acquire_process_lock()
 
+            # A killed consolidation cannot execute its finally block. Only the
+            # exclusive replacement worker may clear its stale tool-mode marker.
+            try:
+                (self._anima_dir / "state" / ".consolidation_mode").unlink(missing_ok=True)
+            except OSError:
+                logger.exception("Failed to clear stale consolidation marker anima=%s", self.anima_name)
+                raise
+
             # Start IPC server first so the socket is created immediately.
             self.ipc_server = IPCServer(socket_path=self.socket_path, request_handler=self._handle_request)
             await self.ipc_server.start()
@@ -782,10 +790,14 @@ class AnimaRunner:
         consolidation_type = params.get("consolidation_type", "daily")
         max_turns = params.get("max_turns", 30)
 
-        result = await self.anima.run_consolidation(
-            consolidation_type=consolidation_type,
-            max_turns=max_turns,
-        )
+        try:
+            result = await self.anima.run_consolidation(
+                consolidation_type=consolidation_type,
+                max_turns=max_turns,
+            )
+        except TimeoutError:
+            logger.warning("Consolidation timed out in worker anima=%s type=%s", self.anima_name, consolidation_type)
+            return {"status": "timeout", "summary": "", "duration_ms": 0}
 
         return {
             "status": "completed",
@@ -802,6 +814,7 @@ class AnimaRunner:
         bootstrap_status = self.anima.bootstrap_state
         return {
             "status": self.anima.primary_status,
+            "consolidation_running": self.anima._status_slots.get("background") == "consolidating",
             "active_label": self.anima.primary_task or None,
             "needs_bootstrap": self.anima.needs_bootstrap,
             "bootstrap_state": bootstrap_status,

@@ -360,6 +360,7 @@ class ConsolidationConfig(BaseModel):
     llm_model: str = DEFAULT_CONSOLIDATION_MODEL
     llm_credential: str = ""
     max_turns: int = 30  # Tool-call loop limit for consolidation tasks
+    hard_timeout_seconds: int = Field(default=1800, ge=60, le=86400)
     weekly_enabled: bool = True  # Phase 3 implementation
     weekly_time: str = "sun:03:00"  # Format: day:HH:MM
     duplicate_threshold: float = 0.85  # Similarity threshold for duplicate detection
