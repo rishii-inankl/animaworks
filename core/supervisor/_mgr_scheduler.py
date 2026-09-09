@@ -17,10 +17,13 @@ from pathlib import Path
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from core.supervisor.process_handle import ProcessState
+from core.supervisor.process_handle import ProcessHandle, ProcessState
 from core.time_utils import get_app_timezone, now_local
 
 logger = logging.getLogger(__name__)
+
+_CONSOLIDATION_IPC_GRACE = 30.0
+_CONSOLIDATION_RECOVERY_TIMEOUT = 30.0
 
 # ── Marker helpers ──────────────────────────────────────────────────
 _MARKER_DIR_NAME = "run"
@@ -267,12 +270,121 @@ class SchedulerMixin:
         """Return the runtime data directory (``~/.animaworks`` or override)."""
         return self.animas_dir.parent
 
+    async def _recover_consolidation_timeout(
+        self, anima_name: str, handle: ProcessHandle, *, expected_pid: int | None
+    ) -> bool:
+        """Confirm cancellation, or restart only the worker that timed out."""
+
+        def still_current() -> bool:
+            return (
+                self.processes.get(anima_name) is handle
+                and handle.get_pid() == expected_pid
+                and handle.state == ProcessState.RUNNING
+                and anima_name not in self._restarting
+            )
+
+        loop = asyncio.get_running_loop()
+        end = loop.time() + _CONSOLIDATION_RECOVERY_TIMEOUT
+        interrupted = False
+        while still_current() and loop.time() < end:
+            try:
+                response = await handle.send_request("get_status", {}, timeout=max(0.001, min(5.0, end - loop.time())))
+                if not still_current():
+                    return False
+                status = response.result or {}
+                if response.error:
+                    logger.warning("consolidation_recovery status error anima=%s", anima_name)
+                elif status.get("consolidation_running") is False or (
+                    "consolidation_running" not in status and status.get("status") == "idle"
+                ):
+                    return True
+            except Exception:
+                logger.warning("consolidation_recovery status unavailable anima=%s", anima_name, exc_info=True)
+
+            if not still_current():
+                return False
+            if not interrupted:
+                interrupted = True
+                try:
+                    await handle.send_request(
+                        "interrupt", {"thread_id": "_background"}, timeout=max(0.001, min(10.0, end - loop.time()))
+                    )
+                except Exception:
+                    logger.warning("consolidation_recovery interrupt failed anima=%s", anima_name, exc_info=True)
+                continue
+            await asyncio.sleep(max(0.0, min(1.0, end - loop.time())))
+
+        if not still_current():
+            logger.warning("consolidation_recovery skipped changed worker anima=%s pid=%s", anima_name, expected_pid)
+            return False
+        logger.error("consolidation_recovery restarting unresponsive worker anima=%s pid=%s", anima_name, expected_pid)
+        try:
+            await self.restart_anima(anima_name)
+        except Exception:
+            logger.exception("consolidation_recovery_failed anima=%s", anima_name)
+            return False
+        replacement = self.processes.get(anima_name)
+        if (
+            replacement is None
+            or replacement.state != ProcessState.RUNNING
+            or replacement.get_pid() in (None, expected_pid)
+        ):
+            logger.error("consolidation_recovery_failed replacement not running anima=%s", anima_name)
+            return False
+        logger.info("consolidation_recovered anima=%s pid=%s", anima_name, replacement.get_pid())
+        return True
+
+    async def _request_consolidation(
+        self,
+        anima_name: str,
+        handle: ProcessHandle,
+        *,
+        kind: str,
+        max_turns: int,
+        hard_timeout: float,
+    ) -> tuple[dict, bool]:
+        """Return the outcome and whether worker-side memory writes have stopped."""
+        expected_pid = handle.get_pid()
+        self._consolidating.add(anima_name)
+        try:
+            try:
+                response = await handle.send_request(
+                    "run_consolidation",
+                    {"consolidation_type": kind, "max_turns": max_turns},
+                    timeout=hard_timeout + _CONSOLIDATION_IPC_GRACE,
+                )
+            except TimeoutError:
+                logger.warning(
+                    "consolidation_timeout anima=%s phase=phase_b type=%s timeout_s=%s",
+                    anima_name,
+                    kind,
+                    hard_timeout + _CONSOLIDATION_IPC_GRACE,
+                )
+                stopped = await self._recover_consolidation_timeout(anima_name, handle, expected_pid=expected_pid)
+                return {"status": "timeout" if stopped else "recovery_failed"}, stopped
+            if response.error:
+                logger.error("consolidation_ipc_error anima=%s type=%s error=%s", anima_name, kind, response.error)
+                return {"status": "failed"}, True
+            result = response.result or {}
+            if result.get("status") == "timeout":
+                logger.warning("consolidation_timeout anima=%s phase=worker type=%s", anima_name, kind)
+            else:
+                logger.info(
+                    "Consolidation completed anima=%s type=%s duration_ms=%s",
+                    anima_name,
+                    kind,
+                    result.get("duration_ms", 0),
+                )
+            return result, True
+        finally:
+            self._consolidating.discard(anima_name)
+
     async def _run_daily_consolidation(self) -> None:
         """Run daily consolidation for all animas via IPC.
 
         Sends ``run_consolidation`` IPC requests to running Anima processes.
         Framework-side post-processing is delegated to the shared lifecycle
-        consolidation pipeline and runs even when the IPC phase times out.
+        consolidation pipeline after worker completion or confirmed recovery.
         """
         logger.info("Starting system-wide daily consolidation")
 
@@ -292,13 +404,15 @@ class SchedulerMixin:
         )
 
         defaults = ConsolidationConfig()
-        max_turns = ConsolidationConfig().max_turns
+        max_turns = defaults.max_turns
         min_entries = defaults.min_episodes_threshold
         model = defaults.llm_model
+        hard_timeout = defaults.hard_timeout_seconds
         if consolidation_cfg:
             max_turns = getattr(consolidation_cfg, "max_turns", max_turns)
             min_entries = getattr(consolidation_cfg, "min_episodes_threshold", min_entries)
             model = getattr(consolidation_cfg, "llm_model", model)
+            hard_timeout = getattr(consolidation_cfg, "hard_timeout_seconds", hard_timeout)
 
         for anima_name, anima_dir in self._iter_consolidation_targets():
             handle = self.processes.get(anima_name)
@@ -327,62 +441,30 @@ class SchedulerMixin:
                 continue
 
             result: dict = {}
+            can_postprocess = False
             try:
-                _consolidating: set[str] = getattr(self, "_consolidating", set())
-                _consolidating.add(anima_name)
-                _timed_out = False
-                try:
-                    response = await handle.send_request(
-                        "run_consolidation",
-                        {"consolidation_type": "daily", "max_turns": max_turns},
-                        timeout=1800.0,
-                    )
-                except TimeoutError:
-                    _timed_out = True
-                    logger.warning(
-                        "consolidation_timeout anima=%s phase=phase_b type=daily timeout_s=1800",
-                        anima_name,
-                    )
-                    try:
-                        await handle.send_request("interrupt", {}, timeout=10.0)
-                    except Exception:
-                        logger.debug("Interrupt request after daily consolidation timeout failed", exc_info=True)
-                finally:
-                    if _timed_out:
-                        # Grace period: keep protection for 120s after timeout
-                        _name_capture = anima_name
-                        asyncio.get_running_loop().call_later(120, self._consolidating.discard, _name_capture)
-                    else:
-                        _consolidating.discard(anima_name)
-
-                if not _timed_out and response.error:
-                    logger.error(
-                        "Daily consolidation IPC error for %s: %s",
-                        anima_name,
-                        response.error,
-                    )
-                elif not _timed_out:
-                    result = response.result or {}
-                    logger.info(
-                        "Daily consolidation for %s: duration_ms=%d",
-                        anima_name,
-                        result.get("duration_ms", 0),
-                    )
-            except Exception:
-                logger.exception("Daily consolidation failed for %s", anima_name)
-            finally:
-                await run_daily_consolidation_post_processing(
-                    anima_name,
-                    anima_dir,
-                    consolidation_cfg=consolidation_cfg,
-                    model=model,
+                result, can_postprocess = await self._request_consolidation(
+                    anima_name, handle, kind="daily", max_turns=max_turns, hard_timeout=hard_timeout
                 )
+            except Exception:
+                logger.exception("Consolidation failed anima=%s type=daily", anima_name)
+            finally:
+                if can_postprocess:
+                    await run_daily_consolidation_post_processing(
+                        anima_name,
+                        anima_dir,
+                        consolidation_cfg=consolidation_cfg,
+                        model=model,
+                    )
+                else:
+                    logger.error("Consolidation post-processing skipped: worker stop unconfirmed anima=%s", anima_name)
 
                 await self._broadcast_event(
                     "system.consolidation",
                     {
                         "anima": anima_name,
                         "type": "daily",
+                        "status": result.get("status", "failed"),
                         "summary": result.get("summary", ""),
                         "duration_ms": result.get("duration_ms", 0),
                     },
@@ -395,7 +477,7 @@ class SchedulerMixin:
 
         Sends ``run_consolidation`` IPC requests to running Anima processes.
         Framework-side post-processing is delegated to the shared lifecycle
-        consolidation pipeline and runs even when the IPC phase times out.
+        consolidation pipeline after worker completion or confirmed recovery.
         """
         logger.info("Starting system-wide weekly integration")
 
@@ -414,9 +496,11 @@ class SchedulerMixin:
         defaults = _CC()
         max_turns = defaults.max_turns
         model = defaults.llm_model
+        hard_timeout = defaults.hard_timeout_seconds
         if consolidation_cfg:
             max_turns = getattr(consolidation_cfg, "max_turns", max_turns)
             model = getattr(consolidation_cfg, "llm_model", model)
+            hard_timeout = getattr(consolidation_cfg, "hard_timeout_seconds", hard_timeout)
 
         for anima_name, anima_dir in self._iter_consolidation_targets():
             handle = self.processes.get(anima_name)
@@ -428,61 +512,30 @@ class SchedulerMixin:
                 continue
 
             result: dict = {}
+            can_postprocess = False
             try:
-                _consolidating_w: set[str] = getattr(self, "_consolidating", set())
-                _consolidating_w.add(anima_name)
-                _timed_out_w = False
-                try:
-                    response = await handle.send_request(
-                        "run_consolidation",
-                        {"consolidation_type": "weekly", "max_turns": max_turns},
-                        timeout=1800.0,
-                    )
-                except TimeoutError:
-                    _timed_out_w = True
-                    logger.warning(
-                        "consolidation_timeout anima=%s phase=phase_b type=weekly timeout_s=1800",
-                        anima_name,
-                    )
-                    try:
-                        await handle.send_request("interrupt", {}, timeout=10.0)
-                    except Exception:
-                        logger.debug("Interrupt request after weekly consolidation timeout failed", exc_info=True)
-                finally:
-                    if _timed_out_w:
-                        _name_capture_w = anima_name
-                        asyncio.get_running_loop().call_later(120, self._consolidating.discard, _name_capture_w)
-                    else:
-                        _consolidating_w.discard(anima_name)
-
-                if not _timed_out_w and response.error:
-                    logger.error(
-                        "Weekly integration IPC error for %s: %s",
-                        anima_name,
-                        response.error,
-                    )
-                elif not _timed_out_w:
-                    result = response.result or {}
-                    logger.info(
-                        "Weekly integration for %s: duration_ms=%d",
-                        anima_name,
-                        result.get("duration_ms", 0),
-                    )
-            except Exception:
-                logger.exception("Weekly integration failed for %s", anima_name)
-            finally:
-                await run_weekly_integration_post_processing(
-                    anima_name,
-                    anima_dir,
-                    consolidation_cfg=consolidation_cfg,
-                    model=model,
+                result, can_postprocess = await self._request_consolidation(
+                    anima_name, handle, kind="weekly", max_turns=max_turns, hard_timeout=hard_timeout
                 )
+            except Exception:
+                logger.exception("Consolidation failed anima=%s type=weekly", anima_name)
+            finally:
+                if can_postprocess:
+                    await run_weekly_integration_post_processing(
+                        anima_name,
+                        anima_dir,
+                        consolidation_cfg=consolidation_cfg,
+                        model=model,
+                    )
+                else:
+                    logger.error("Consolidation post-processing skipped: worker stop unconfirmed anima=%s", anima_name)
 
                 await self._broadcast_event(
                     "system.consolidation",
                     {
                         "anima": anima_name,
                         "type": "weekly",
+                        "status": result.get("status", "failed"),
                         "summary": result.get("summary", ""),
                         "duration_ms": result.get("duration_ms", 0),
                     },

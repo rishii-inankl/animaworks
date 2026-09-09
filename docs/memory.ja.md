@@ -486,6 +486,28 @@ protected: false
 
 **2. 後処理**: `ForgettingEngine.neurogenesis_reorganize()`（非同期）、RAGインデックス再構築
 
+### 記憶整理の時間上限と復旧
+
+`config.json` の `consolidation.hard_timeout_seconds` は、日次・週次のAnima側処理に
+時間上限を設ける。backgroundレーンの空き待ちも含み、既定は1800秒（30分）、
+設定可能範囲は60〜86400秒。`max_turns` とは別の上限である。設定変更後はサーバーを
+再起動し、監視側とworker側へ同じ設定を読み込ませる。
+
+上限に達すると処理をキャンセルし、レーンのロック、状態、セッションcontext、
+`.consolidation_mode` を片付ける。成功を示す `consolidation_end` は記録せず、
+`status: timeout` を返す。保存済みの記憶は残り、未完了のPhase B繰越は次回用に保持する。
+
+監視側はキャンセル完了のために追加で30秒待つ。IPC応答がなければ記憶整理の稼働状態を
+確認し、backgroundレーンだけへ中断を要求して最大30秒間、停止を確認する。
+停止を確認できなければ対象workerを再起動し、新しいPIDで稼働したことを確認する。
+既に整理を終えたworkerや入れ替わったworkerには中断を送らない。復旧確認に失敗した場合は
+後処理を実行しない。再起動したworkerはプロセスの排他ロック取得後に残存する整理中の印を除く。
+
+整理中のkeepaliveは生存通知として扱い、進捗時刻はPhase Aの応答や整理完了時に更新する。
+この上限にはフレームワーク側の後処理を含まない。ブロックしたコードのキャンセルが即座に
+終わる保証はなく、応答不能時は別プロセスの監視側が復旧を担う。
+[Pythonのキャンセル・timeout仕様](https://docs.python.org/3.12/library/asyncio-task.html#timeouts)も参照。
+
 ### 月次忘却パイプライン
 
 > スケジュール: `system_consolidation.py` の月次忘却（`ConsolidationConfig.monthly_time`、既定 1日 04:00 JST）

@@ -7,9 +7,7 @@ Verifies that ``_iter_consolidation_targets()`` scans ``self.animas_dir``
 on disk rather than relying on ``self.processes`` (live process dict),
 so that stopped / crashed animas still receive memory consolidation.
 
-Note: Tests for ``_run_daily_consolidation()`` and ``_run_weekly_integration()``
-were removed because those methods call ``daily_consolidate``/``weekly_integrate``
-which were removed from ConsolidationEngine in the consolidation refactor.
+Daily and weekly IPC timeout tests also verify when post-processing is safe.
 
 Issue: docs/issues/20260217_consolidation-run-for-all-animas.md
 """
@@ -151,6 +149,10 @@ class _TimeoutHandle:
 
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.status_reads = 0
+
+    def get_pid(self) -> int:
+        return 123
 
     async def send_request(
         self,
@@ -161,6 +163,9 @@ class _TimeoutHandle:
         self.calls.append(method)
         if method == "run_consolidation":
             raise TimeoutError("consolidation timed out")
+        if method == "get_status":
+            self.status_reads += 1
+            return IPCResponse(id="fake", result={"consolidation_running": self.status_reads == 1})
         return IPCResponse(id="fake", result={})
 
 
@@ -197,7 +202,7 @@ async def test_daily_consolidation_timeout_logs_once_and_continues(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Timeouts still run framework-side post-processing before continuing."""
+    """Confirmed cancellation permits framework-side post-processing."""
     sup = _make_supervisor(tmp_path)
     _create_anima_dir(sup.animas_dir, "mio")
     handle = _TimeoutHandle()
@@ -220,7 +225,7 @@ async def test_daily_consolidation_timeout_logs_once_and_continues(
     with caplog.at_level(logging.WARNING, logger="core.supervisor._mgr_scheduler"):
         await sup._run_daily_consolidation()
 
-    assert handle.calls == ["run_consolidation", "interrupt"]
+    assert handle.calls == ["run_consolidation", "get_status", "interrupt", "get_status"]
     assert "consolidation_timeout anima=mio phase=phase_b type=daily" in caplog.text
     assert "Daily consolidation failed for mio" not in caplog.text
     mock_forgetter.synaptic_downscaling.assert_called_once()
@@ -245,7 +250,32 @@ async def test_weekly_consolidation_timeout_logs_once_and_continues(
     with caplog.at_level(logging.WARNING, logger="core.supervisor._mgr_scheduler"):
         await sup._run_weekly_integration()
 
-    assert handle.calls == ["run_consolidation", "interrupt"]
+    assert handle.calls == ["run_consolidation", "get_status", "interrupt", "get_status"]
     assert "consolidation_timeout anima=mio phase=phase_b type=weekly" in caplog.text
     assert "Weekly integration failed for mio" not in caplog.text
     postprocess.assert_awaited_once()
+
+
+@pytest.mark.parametrize("kind", ["daily", "weekly"])
+async def test_failed_recovery_skips_postprocessing(tmp_path, monkeypatch, kind, caplog):
+    sup = _make_supervisor(tmp_path)
+    _create_anima_dir(sup.animas_dir, "test")
+    sup.processes["test"] = _TimeoutHandle()
+    sup._recover_consolidation_timeout = AsyncMock(return_value=False)
+    sup._broadcast_event = AsyncMock()
+    monkeypatch.setattr("core.memory.consolidation.ConsolidationEngine", _RecentEpisodesEngine)
+    daily_post = AsyncMock()
+    weekly_post = AsyncMock()
+    monkeypatch.setattr("core.lifecycle.system_consolidation.run_daily_consolidation_post_processing", daily_post)
+    monkeypatch.setattr("core.lifecycle.system_consolidation.run_weekly_integration_post_processing", weekly_post)
+
+    if kind == "daily":
+        await sup._run_daily_consolidation()
+    else:
+        await sup._run_weekly_integration()
+
+    daily_post.assert_not_awaited()
+    weekly_post.assert_not_awaited()
+    assert sup._broadcast_event.await_args.args[1]["status"] == "recovery_failed"
+    assert not sup._consolidating
+    assert "worker stop unconfirmed" in caplog.text
