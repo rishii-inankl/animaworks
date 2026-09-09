@@ -139,6 +139,58 @@ def _mock_config(
     )
 
 
+@pytest.mark.parametrize("kind", ["daily", "weekly"])
+async def test_cancelled_phase_b_preserves_carryover_and_skips_learning(kind):
+    anima = _make_lifecycle(ModelConfig(model="openai/test", resolved_mode="D"))
+    engine = _FakeEngine(recent_episodes=[{"date": "2026-09-08", "time": "10:00", "content": "pending"}])
+    anima._run_autonomous_skill_learning = MagicMock()
+
+    async def partial(*args, **kwargs):
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            return CycleResult(trigger="consolidation:" + kind, action="responded", summary="partial")
+
+    anima.agent.run_cycle = partial
+    with (
+        patch("core.config.load_config", return_value=_mock_config()),
+        patch("core.config.resolve_execution_mode", return_value="D"),
+        patch("core._anima_lifecycle.load_prompt", return_value="test prompt"),
+        pytest.raises(TimeoutError),
+    ):
+        async with asyncio.timeout(0.01):
+            await getattr(anima, "_run_" + kind + "_consolidation")(engine, max_turns=7)
+
+    assert not engine.carryover_cleared
+    if kind == "daily":
+        assert engine.carryover_items
+    anima._run_autonomous_skill_learning.assert_not_called()
+
+
+async def test_cancelled_phase_a_does_not_write_partial_episode_or_enter_phase_b():
+    anima = _make_lifecycle(ModelConfig(model="openai/test", resolved_mode="D"))
+    engine = _FakeEngine(chunks=["test activity"])
+
+    async def partial(*args, **kwargs):
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            return "partial episode"
+
+    with (
+        patch("core.config.load_config", return_value=_mock_config()),
+        patch("core.config.resolve_execution_mode", return_value="D"),
+        patch("core._anima_lifecycle.load_prompt", return_value="test prompt"),
+        patch("core.memory._llm_utils.one_shot_completion", side_effect=partial),
+        pytest.raises(TimeoutError),
+    ):
+        async with asyncio.timeout(0.01):
+            await anima._run_daily_consolidation(engine, max_turns=7)
+
+    assert not engine.write_calls
+    assert not anima.agent.calls
+
+
 @pytest.mark.asyncio
 async def test_daily_phase_b_uses_consolidation_model_without_mutating_agent_executor():
     status_config = ModelConfig(model="bedrock/qwen.qwen3-next-80b-a3b", resolved_mode="S")

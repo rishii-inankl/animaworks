@@ -486,6 +486,8 @@ At the deadline, the worker cancels the request and releases its lane, status,
 session context, and `.consolidation_mode` marker. It reports `status: timeout`
 without a successful `consolidation_end` event. Already saved memory remains;
 unfinished Phase B carryover is retained for a later run.
+Pending cancellation is checked immediately after LLM returns, before saving a
+Phase A episode, clearing Phase B carryover, or starting autonomous skill learning.
 
 The supervisor allows another 30 seconds for cancellation to finish. If no IPC
 response arrives, it checks whether consolidation is still running, interrupts

@@ -26,6 +26,13 @@ from core.time_utils import now_local
 logger = logging.getLogger("animaworks.anima")
 
 
+def _raise_if_cancelled() -> None:
+    """Do not commit success-side effects after an executor suppresses cancellation."""
+    task = asyncio.current_task()
+    if task is not None and task.cancelling():
+        raise asyncio.CancelledError
+
+
 def _agent_for_lane(owner: Any, lane: str):
     getter = getattr(owner, "_agent_for_lane", None)
     if callable(getter):
@@ -413,9 +420,7 @@ class LifecycleMixin:
                     # An executor may return a partial result after catching
                     # CancelledError. Preserve the enclosing deadline/caller's
                     # cancellation instead of recording successful consolidation.
-                    task = asyncio.current_task()
-                    if task is not None and task.cancelling():
-                        raise asyncio.CancelledError
+                    _raise_if_cancelled()
                     self._last_activity = now_local()
                     self._last_progress_at = self._last_activity
                     self._activity.log(
@@ -526,6 +531,7 @@ class LifecycleMixin:
                     credential=consolidation_credential,
                     max_tokens=8192,
                 )
+                _raise_if_cancelled()
                 self._last_progress_at = now_local()
                 if raw:
                     episode_parts.append(engine._sanitize_llm_output(raw))
@@ -662,6 +668,7 @@ class LifecycleMixin:
                 )
                 raise
 
+        _raise_if_cancelled()
         engine.clear_phase_b_carryover()
 
         autolearn = self._run_autonomous_skill_learning()
@@ -736,6 +743,7 @@ class LifecycleMixin:
                 model_config_override=consolidation_model_config,
             )
 
+        _raise_if_cancelled()
         autolearn = self._run_autonomous_skill_learning()
         summary = result.summary or ""
         if autolearn is not None and autolearn.report_lines:
