@@ -496,6 +496,8 @@ protected: false
 上限に達すると処理をキャンセルし、レーンのロック、状態、セッションcontext、
 `.consolidation_mode` を片付ける。成功を示す `consolidation_end` は記録せず、
 `status: timeout` を返す。保存済みの記憶は残り、未完了のPhase B繰越は次回用に保持する。
+LLMから戻った直後にキャンセル状態を確認し、Phase Aの途中episode保存、Phase B繰越の削除、
+自律skill学習の開始より先に中断を伝播させる。
 
 監視側はキャンセル完了のために追加で30秒待つ。IPC応答がなければ記憶整理の稼働状態を
 確認し、backgroundレーンだけへ中断を要求して最大30秒間、停止を確認する。
