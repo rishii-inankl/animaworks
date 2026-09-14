@@ -247,6 +247,8 @@ Early experiments paired BM25 with vectors for the main corpus; multilingual den
 
 Embedding and ChromaDB operations normally run through the vector worker so child processes do not each own fragile vector state. If ChromaDB crashes or the index becomes inconsistent, `repair-rag` can quarantine the target `vectordb` and rebuild the index from memory files.
 
+SQLite health checks use a read-only, WAL-aware snapshot for `PRAGMA quick_check` and, when the FTS table exists, one `MATCH 'test'` count query. This FTS sample does not prove the whole index is sound. Checks never issue the FTS `integrity-check` INSERT. Live databases must not be opened with `immutable=1`, which bypasses locking and change detection and can report false corruption during writes or checkpoints. Existing `corrupt / detect` repair states are retained for operator review; this check does not schedule a nightly rebuild or clear earlier findings.
+
 | Search signal | Method | Brain analog |
 |---|---|---|
 | **Semantic vector** | Dense similarity (`intfloat/multilingual-e5-small`, 384-d, ChromaDB) | Conceptual neighbors; spreading activation approximated |

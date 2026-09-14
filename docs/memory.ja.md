@@ -351,6 +351,8 @@ score × 0.5 で最終結果に追加（activation: "spreading" タグ付き）
 
 ChromaDBのネイティブアクセスは、通常プロセスからは無効化されている。サーバー、CLIの `index`、`repair-rag` は vector worker または一時 vector worker を経由し、クラッシュやロック破損を記録した場合は repair service が隔離・再構築の候補として扱う。`animaworks repair-rag --anima NAME --full` は破損した `vectordb` を quarantine し、対象Animaの記憶からフル再インデックスする。
 
+SQLiteの健全性検査は、WALを反映する読取専用の同一スナップショットで `PRAGMA quick_check` を実行し、FTSテーブルがあれば `MATCH 'test'` の件数を1回調べる。このサンプルで索引全体の健全性は保証できない。書込になるFTSの `integrity-check` INSERTは実行しない。稼働中DBを `immutable=1` で開くとロック・変更検知が省略され、書込やcheckpoint中に破損を誤検知し得るため使用しない。既存の `corrupt / detect` は確認用に保持し、この検査による夜間再構築の予約や過去の検知の自動解除は行わない。
+
 ---
 
 ## YAMLフロントマター

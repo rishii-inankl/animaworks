@@ -11,6 +11,7 @@ import os
 import sqlite3
 import time
 from collections.abc import Callable
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -46,7 +47,7 @@ def quick_check_chroma_sqlite(
     timeout_seconds: float = DEFAULT_QUICK_CHECK_TIMEOUT_SECONDS,
     runner: Callable[[Path, float], tuple[str, ...]] | None = None,
 ) -> SQLiteHealthResult:
-    """Run ``PRAGMA quick_check`` against an existing Chroma SQLite DB.
+    """Run ``PRAGMA quick_check`` and a read-only FTS sample against Chroma.
 
     Missing databases are healthy for preflight purposes because Chroma will
     create them on first use.  A non-``ok`` result or SQLite ``DatabaseError``
@@ -256,7 +257,7 @@ def check_anima_vectordb_health_via_worker_or_direct(
 
 
 def _run_quick_check(db_path: Path, timeout_seconds: float) -> tuple[str, ...]:
-    with _connect_readonly(db_path, timeout_seconds) as conn:
+    with closing(_connect_readonly(db_path, timeout_seconds)) as conn:
         conn.execute(f"PRAGMA busy_timeout = {int(timeout_seconds * 1000)}")
         deadline = time.monotonic() + timeout_seconds
         timed_out = False
@@ -270,10 +271,23 @@ def _run_quick_check(db_path: Path, timeout_seconds: float) -> tuple[str, ...]:
 
         conn.set_progress_handler(progress_handler, 1000)
         try:
+            # Keep schema, quick_check and FTS reads on one WAL-aware snapshot.
+            conn.execute("BEGIN")
             rows = conn.execute("PRAGMA quick_check").fetchall()
             has_collections = conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='collections'"
             ).fetchone()
+            has_fts = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='embedding_fulltext_search'"
+            ).fetchone()
+            if has_fts:
+                # A smoke probe, not an exhaustive FTS integrity check. The
+                # special FTS 'integrity-check' INSERT is forbidden here.
+                conn.execute(
+                    "SELECT count(*) FROM embedding_fulltext_search "
+                    "WHERE embedding_fulltext_search MATCH ?",
+                    ("test",),
+                ).fetchone()
         except sqlite3.OperationalError as exc:
             if timed_out:
                 raise TimeoutError(f"quick_check exceeded {timeout_seconds:.1f}s for {db_path}") from exc
@@ -290,7 +304,9 @@ def _connect(db_path: Path, timeout_seconds: float) -> sqlite3.Connection:
 
 
 def _connect_readonly(db_path: Path, timeout_seconds: float) -> sqlite3.Connection:
-    uri = f"file:{db_path}?mode=ro&immutable=1"
+    # immutable skips WAL and locking/change detection, and may falsely report
+    # corruption when another process writes or checkpoints this live database.
+    uri = f"{db_path.resolve().as_uri()}?mode=ro"
     return sqlite3.connect(uri, uri=True, timeout=timeout_seconds)
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -34,6 +35,72 @@ def test_quick_check_valid_chroma_sqlite_db(tmp_path: Path) -> None:
     assert result.ok is True
     assert result.status == "ok"
     assert result.details == ("ok", "collections")
+
+
+def test_quick_check_reads_committed_wal_without_checkpoint(tmp_path: Path) -> None:
+    """An immutable reader misses schema committed only to the WAL."""
+    db_path = chroma_sqlite_path(tmp_path)
+    with closing(sqlite3.connect(db_path)) as writer:
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        writer.execute("CREATE TABLE collections(id INTEGER PRIMARY KEY)")
+        writer.execute(
+            "CREATE VIRTUAL TABLE embedding_fulltext_search USING fts5(string_value, tokenize='trigram')"
+        )
+        writer.execute("INSERT INTO embedding_fulltext_search VALUES ('test committed')")
+        writer.commit()
+        # Keep a native writer open, as the live vector worker does. A second
+        # uncommitted write must neither block this check nor affect its view.
+        writer.execute("INSERT INTO embedding_fulltext_search VALUES ('test pending')")
+        result = quick_check_chroma_sqlite(tmp_path)
+        assert result.ok, result
+        assert result.status == "ok"
+
+
+def test_quick_check_fts_probe_is_readonly_and_closes_connection(tmp_path: Path) -> None:
+    from core.memory.rag.sqlite_health import _connect_readonly
+
+    db_path = chroma_sqlite_path(tmp_path)
+    with closing(sqlite3.connect(db_path)) as writer:
+        writer.execute("CREATE TABLE collections(id INTEGER PRIMARY KEY)")
+        writer.execute("CREATE VIRTUAL TABLE embedding_fulltext_search USING fts5(string_value)")
+        writer.execute("INSERT INTO embedding_fulltext_search VALUES ('test sample')")
+        writer.commit()
+    before = db_path.read_bytes()
+    reader = _connect_readonly(db_path, 1)
+    statements = []
+    reader.set_trace_callback(statements.append)
+    with patch("core.memory.rag.sqlite_health._connect_readonly", return_value=reader):
+        assert quick_check_chroma_sqlite(tmp_path).ok
+    assert any("MATCH 'test'" in sql for sql in statements)
+    assert not any(sql.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE")) for sql in statements)
+    assert db_path.read_bytes() == before
+    import pytest
+
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        reader.execute("SELECT 1")
+
+
+def test_quick_check_detects_damaged_fts_segment(tmp_path: Path) -> None:
+    db_path = chroma_sqlite_path(tmp_path)
+    with closing(sqlite3.connect(db_path)) as writer:
+        writer.execute("CREATE TABLE collections(id INTEGER PRIMARY KEY)")
+        writer.execute("CREATE VIRTUAL TABLE embedding_fulltext_search USING fts5(string_value)")
+        writer.execute("INSERT INTO embedding_fulltext_search VALUES ('test sample')")
+        writer.commit()
+        # Intentional fixture damage only; this is not a production hypothesis.
+        writer.execute("UPDATE embedding_fulltext_search_data SET block=x'00' WHERE id > 10")
+        writer.commit()
+    assert quick_check_chroma_sqlite(tmp_path).corrupt
+
+
+def test_quick_check_uri_escapes_filename(tmp_path: Path) -> None:
+    persist_dir = tmp_path / "index?#日本語"
+    persist_dir.mkdir()
+    with closing(sqlite3.connect(chroma_sqlite_path(persist_dir))) as writer:
+        writer.execute("CREATE TABLE collections(id INTEGER PRIMARY KEY)")
+        writer.commit()
+    assert quick_check_chroma_sqlite(persist_dir).ok
 
 
 def test_quick_check_rejects_zero_byte_db(tmp_path: Path) -> None:
