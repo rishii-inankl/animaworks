@@ -830,6 +830,10 @@ class PermissionsConfig(BaseModel):
     commands: CommandsPermission = Field(default_factory=CommandsPermission)
     external_tools: ExternalToolsPermission = Field(default_factory=ExternalToolsPermission)
     tool_creation: ToolCreationPermission = Field(default_factory=ToolCreationPermission)
+    # Codex backend only. "workspace" keeps the legacy workspace-write sandbox.
+    # "private_tmp_only" makes the model shell read-only except /private/tmp;
+    # persistent writes must go through MCP tools (see core/execution/codex_shell_guard.py).
+    codex_shell_writes: Literal["workspace", "private_tmp_only"] = "workspace"
 
 
 def load_permissions(anima_dir: Path) -> PermissionsConfig:

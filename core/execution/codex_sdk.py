@@ -40,6 +40,14 @@ from core.execution.base import (
     ToolCallRecord,
     _truncate_for_record,
 )
+from core.execution.codex_shell_guard import (
+    is_guard_thread,
+    is_private_tmp_only,
+    load_codex_permissions,
+    profile_fingerprint,
+    record_guard_thread,
+    revoke_guard_threads,
+)
 from core.execution.session_types import is_persistent_codex_session, resolve_runtime_session_type
 from core.memory.shortterm import ShortTermMemory
 from core.platform.codex import default_home_dir, get_codex_executable
@@ -798,6 +806,11 @@ class CodexSDKExecutor(BaseExecutor):
         ctx = current_runtime_session()
         if ctx is not None:
             env.update(ctx.to_env())
+        from core.execution.codex_shell_guard import PRIVATE_TMP, is_private_tmp_only, load_codex_permissions
+
+        if is_private_tmp_only(load_codex_permissions(self._anima_dir)):
+            # Shell commands inherit the app-server env; the per-user $TMPDIR is not writable.
+            env["TMPDIR"] = str(PRIVATE_TMP)
         # Windows requires SYSTEMROOT for Winsock/TLS initialisation and
         # TEMP/TMP for scratch files.  Without these the Codex CLI subprocess
         # fails with OS error 10106 (WSAEPROVIDERFAILEDINIT).
@@ -920,15 +933,22 @@ class CodexSDKExecutor(BaseExecutor):
         provider_config = _resolve_codex_provider_config(self._model_config)
         esc = _escape_toml_string
 
-        from core.config.models import load_permissions
+        from core.execution.codex_shell_guard import (
+            is_private_tmp_only,
+            load_codex_permissions,
+            render_private_tmp_only_toml,
+            validate_private_tmp_only,
+        )
 
-        permissions_config = load_permissions(self._anima_dir)
+        permissions_config = load_codex_permissions(self._anima_dir)
 
-        if "/" in permissions_config.file_roots:
-            sandbox_mode = "danger-full-access"
+        if is_private_tmp_only(permissions_config):
+            validate_private_tmp_only(permissions_config, self._anima_dir, self._task_cwd)
+            sandbox_head, sandbox_section = render_private_tmp_only_toml(esc)
+        elif "/" in permissions_config.file_roots:
+            sandbox_head = 'sandbox_mode = "danger-full-access"\n'
             sandbox_section = ""
         else:
-            sandbox_mode = "workspace-write"
             writable_roots = [str(self._anima_dir)]
             for root in permissions_config.file_roots:
                 resolved = str(Path(root).resolve())
@@ -939,6 +959,7 @@ class CodexSDKExecutor(BaseExecutor):
                 if cwd_str not in writable_roots:
                     writable_roots.append(cwd_str)
             roots_list = ", ".join(f'"{esc(r)}"' for r in writable_roots)
+            sandbox_head = 'sandbox_mode = "workspace-write"\n'
             sandbox_section = f"\n[sandbox_workspace_write]\nwritable_roots = [{roots_list}]\nnetwork_access = true\n"
 
         mcp_env = self._build_mcp_env()
@@ -962,7 +983,7 @@ class CodexSDKExecutor(BaseExecutor):
             f'developer_instructions = "{esc(self._CODEX_DEVELOPER_INSTRUCTIONS)}"\n'
             f'personality = "friendly"\n'
             f'model_verbosity = "high"\n'
-            f'sandbox_mode = "{sandbox_mode}"\n'
+            f"{sandbox_head}"
             f'approval_policy = "never"\n'
             f"{sandbox_section}"
             f"{provider_section}"
@@ -1002,9 +1023,12 @@ class CodexSDKExecutor(BaseExecutor):
     def _sdk_sandbox(self) -> Any:
         from openai_codex import Sandbox
 
-        from core.config.models import load_permissions
+        from core.execution.codex_shell_guard import is_private_tmp_only, load_codex_permissions
 
-        permissions_config = load_permissions(self._anima_dir)
+        permissions_config = load_codex_permissions(self._anima_dir)
+        if is_private_tmp_only(permissions_config):
+            # A thread-level sandbox would replace the config.toml permission profile.
+            return None
         if "/" in permissions_config.file_roots:
             return Sandbox.full_access
         return Sandbox.workspace_write
@@ -1288,6 +1312,18 @@ class CodexSDKExecutor(BaseExecutor):
     ) -> Any:
         """Start a new thread or attempt to resume an existing one."""
         thread_kwargs = self._codex_thread_kwargs(system_prompt)
+        guard_fp = self._private_tmp_only_fingerprint()
+        if guard_fp is None:
+            # Any thread started/resumed without the guard may carry workspace-write; stamps no longer hold.
+            revoke_guard_threads(self._codex_home)
+        elif thread_id and not is_guard_thread(self._codex_home, thread_id, guard_fp):
+            logger.warning(
+                "Not resuming Codex thread %s: not started under the private_tmp_only profile. Starting fresh thread.",
+                thread_id,
+            )
+            if persist_thread:
+                _clear_thread_id(self._anima_dir, session_type, chat_thread_id)
+            thread_id = None
         if thread_id:
             try:
                 thread = await _maybe_await(codex.thread_resume(thread_id, **thread_kwargs))
@@ -1303,7 +1339,15 @@ class CodexSDKExecutor(BaseExecutor):
                     _clear_thread_id(self._anima_dir, session_type, chat_thread_id)
         thread = await _maybe_await(codex.thread_start(**thread_kwargs))
         logger.info("Started fresh Codex thread")
+        if guard_fp is not None:
+            record_guard_thread(self._codex_home, str(thread.id), guard_fp)
         return thread
+
+    def _private_tmp_only_fingerprint(self) -> str | None:
+        """Profile fingerprint when codex_shell_writes=private_tmp_only, else None."""
+        if not is_private_tmp_only(load_codex_permissions(self._anima_dir)):
+            return None
+        return profile_fingerprint(_escape_toml_string)
 
     def discard_thread(
         self,
