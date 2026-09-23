@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextvars
 import logging
+import os
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -81,14 +82,25 @@ _PROTECTED_FILES = frozenset(
         "bootstrap.md",
         "state/bm25_longterm_index.json",
         "state/bm25_longterm_index.dirty",
+        # Task ledger: only TaskQueueManager (update_task etc.) may append.
+        "state/task_queue.jsonl",
+        "state/task_queue_archive.jsonl",
     }
 )
 
 _PROTECTED_DIRS = frozenset(
     {
         "activity_log",
+        # Codex runtime config (config.toml, instructions.md) written by the executor.
+        ".codex_home",
     }
 )
+
+# Anima dirs usually live on case-insensitive APFS, where "STATE/TASK_QUEUE.JSONL"
+# opens the protected file.  Matching case-insensitively may over-block on a
+# case-sensitive volume, which is the safe direction.
+_PROTECTED_FILES_FOLDED = frozenset(p.casefold() for p in _PROTECTED_FILES)
+_PROTECTED_DIRS_FOLDED = frozenset(d.casefold() for d in _PROTECTED_DIRS)
 
 _EPISODE_FILENAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(_.+)?\.md$")
 
@@ -309,17 +321,36 @@ def _is_protected_write(anima_dir: Path, target: Path) -> str | None:
         )
 
     rel = str(resolved.relative_to(anima_resolved))
-    if rel in _PROTECTED_FILES:
+    if Path(rel).as_posix().casefold() in _PROTECTED_FILES_FOLDED:
         return _error_result(
             "PermissionDenied",
             f"'{rel}' is a protected file and cannot be modified by the anima itself",
         )
 
     rel_parts = Path(rel).parts
-    if rel_parts and rel_parts[0] in _PROTECTED_DIRS:
+    if rel_parts and rel_parts[0].casefold() in _PROTECTED_DIRS_FOLDED:
         return _error_result(
             "PermissionDenied",
             f"'{rel_parts[0]}/' is a protected directory and cannot be modified by the anima itself",
         )
+
+    # A pre-existing hardlink elsewhere in anima_dir shares the protected inode.
+    if resolved.exists():
+        for protected in _PROTECTED_FILES:
+            candidate = anima_resolved / protected
+            try:
+                same = os.path.samefile(resolved, candidate)
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                return _error_result(
+                    "PermissionDenied",
+                    f"Cannot verify '{rel}' against protected file '{protected}': {exc}",
+                )
+            if same:
+                return _error_result(
+                    "PermissionDenied",
+                    f"'{rel}' is the same file as protected '{protected}' and cannot be modified by the anima itself",
+                )
 
     return None
